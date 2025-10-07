@@ -1,0 +1,107 @@
+name: QEMU RISC-V64 CI
+
+# 触发条件：针对 learning-qemu-2025 分支的推送和 PR
+on:
+  push:
+    branches: [ learning-qemu-2025 ]
+  pull_request:
+    branches: [ learning-qemu-2025 ]
+
+jobs:
+  build-test-riscv64:
+    name: Build & Test RISC-V64 (softmmu)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 编译配置：默认（优化）和调试模式
+        config:
+          - { name: "default", flags: "" }
+
+    steps:
+      # 步骤1：拉取代码（含子模块）
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 拉取 QEMU 依赖的子模块（如 dtc、slirp）
+
+      # 步骤2：安装 RISC-V 编译依赖
+      - name: Install dependencies
+        run: |
+          # 启用 deb-src 源（将所有 deb 源对应的 deb-src 源解锁）
+          sudo sed -i '/^# deb-src /s/^# //' /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt update && sudo apt build-dep qemu
+          # 创建工具链安装目录
+          sudo mkdir -p /opt/riscv
+          # 下载工具链压缩包
+          wget https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2025.09.28/riscv64-elf-ubuntu-22.04-gcc-nightly-2025.09.28-nightly.tar.xz -O riscv-toolchain.tar.xz
+          # 解压到安装目录
+          sudo tar -xJf riscv-toolchain.tar.xz -C /opt/riscv --strip-components=1
+          # 设置权限
+          sudo chown -R $USER:$USER /opt/riscv
+          echo "/opt/riscv/bin" >> $GITHUB_PATH
+          export PATH=$PATH:/opt/riscv/bin/
+          riscv64-unknown-elf-gcc --version  # 验证编译器是否可用
+          # 安装 Rust 工具链
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          # 验证 Rust 安装
+          rustup --version
+          rustc --version
+          cargo --version
+      # 步骤3：配置 QEMU，仅编译 riscv64-softmmu
+      - name: Configure QEMU (riscv64-softmmu)
+        run: |
+          ./configure --target-list=riscv64-softmmu \
+                      --extra-cflags="-O0 -g3" \
+                      --cross-prefix-riscv64=riscv64-unknown-elf- \
+                      --enable-rust
+
+      # 步骤4：编译 QEMU（多线程加速）
+      - name: Build QEMU
+        run: |
+          ninja -j$(nproc) -C build # 利用所有 CPU 核心加速编译
+
+      # 步骤5：运行单元测试（验证核心功能）
+      - name: Run unit tests
+        run: |
+          make check-gevico-tcg || true
+
+      - name: Generate summary JSON
+        run: |
+          # 定义输出文件路径
+          OUTPUT=build/tests/gevico/tcg/riscv64-softmmu/result.log
+          # 定义总结文件路径
+          SUMMARY=build/summary.json
+          # 如果 $OUTPUT 为空，不存在该文件，则 total_succeeds为0
+          total_succeeds=0
+          total_exercations=10
+          if [ -f "$OUTPUT" ]; then
+            total_succeeds=$(cat $OUTPUT)
+          fi
+
+          # 生成新的 JSON 内容
+          new_json=$(jq -n \
+            --arg channel "github" \
+            --argjson courseId "1902" \
+            --arg ext "{}" \
+            --arg name "${{ github.actor }}" \
+            --argjson score "$total_succeeds" \
+            --argjson totalScore "$total_exercations" \
+            '{channel: $channel, courseId: $courseId, ext: $ext, name: $name, score: $score, totalScore: $totalScore}')
+
+          # 保存新的 JSON 文件
+          echo "$new_json" > $SUMMARY
+
+          # 打印新的 JSON 文件到终端
+          cat $SUMMARY
+      - name: Post summary JSON to remote API
+        run: |
+          if [ -f "$OUTPUT" ]; then
+            curl -X POST "https://api.opencamp.cn/web/api/courseRank/createByThirdToken" \
+              -H "accept: application/json;charset=utf-8" \
+              -H "Content-Type: application/json" \
+              -H "token: 6060a82b15ae4842b7f69f16059386ad" \
+              -d @$SUMMARY \
+              -v
+          fi
