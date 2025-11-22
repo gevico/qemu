@@ -1,6 +1,8 @@
 /*
- * QEMU RISC-V Virt Board Compatible with kendryte K230 SDK
+ *  * K230 Watchdog Compatible with kendryte K230 SDK
  *
+ * 
+ * Copyright (c) 2025 Mig Yang <temashking@foxmail.com>
  * Copyright (c) 2025 Chao Liu <chao.liu@zevorn.cn>
  *
  * Provides a board compatible with the kendryte K230 SDK
@@ -26,6 +28,7 @@
 
 #include "hw/boards.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/watchdog/k230_wdt.h"
 
 #define C908_CPU_HARTID   (0)
 
@@ -40,6 +43,7 @@ typedef struct K230SoCState {
     /*< public >*/
     RISCVHartArrayState c908_cpu; /* Small core */
 
+    K230WdtState wdt[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
 
@@ -130,6 +134,8 @@ enum {
     K230_UART2_IRQ  = 18,
     K230_UART3_IRQ  = 19,
     K230_UART4_IRQ  = 20,
+    K230_WDT0_IRQ   = 32,
+    K230_WDT1_IRQ   = 33,
 };
 
 /*
