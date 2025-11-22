@@ -109,11 +109,19 @@ static void k230_soc_init(Object *obj)
 {
     K230SoCState *s = RISCV_K230_SOC(obj);
     RISCVHartArrayState *cpu0 = &s->c908_cpu;
+    RISCVHartArrayState *cpu1 = &s->c908v_cpu;
 
     object_initialize_child(obj, "c908-cpu", cpu0, TYPE_RISCV_HART_ARRAY);
     qdev_prop_set_uint32(DEVICE(cpu0), "hartid-base", 0);
     qdev_prop_set_string(DEVICE(cpu0), "cpu-type", TYPE_RISCV_CPU_THEAD_C908);
     qdev_prop_set_uint64(DEVICE(cpu0), "resetvec",
+                         memmap[K230_DEV_BOOTROM].base);
+
+    /* Big Core */
+    object_initialize_child(obj, "c908v-cpu", cpu1, TYPE_RISCV_HART_ARRAY);
+    qdev_prop_set_uint32(DEVICE(cpu1), "hartid-base", C908V_CPU_HARTID);
+    qdev_prop_set_string(DEVICE(cpu1), "cpu-type", TYPE_RISCV_CPU_THEAD_C908);
+    qdev_prop_set_uint64(DEVICE(cpu1), "resetvec",
                          memmap[K230_DEV_BOOTROM].base);
 }
 
@@ -140,11 +148,16 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 {
     K230SoCState *s = RISCV_K230_SOC(dev);
     MemoryRegion *sys_mem = get_system_memory();
-    int c908_cpus;
+    int c908_cpus, c908v_cpus, total_cpus;
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
 
     c908_cpus = s->c908_cpu.num_harts;
+
+    /* Big Core */
+    sysbus_realize(SYS_BUS_DEVICE(&s->c908v_cpu), &error_fatal);
+    c908v_cpus = s->c908v_cpu.num_harts;
+    total_cpus = c908_cpus + c908v_cpus;
 
     /* SRAM */
     memory_region_init_ram(&s->sram, OBJECT(dev), "sram",
@@ -160,13 +173,13 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     /* PLIC */
     s->c908_plic = k230_create_plic(C908_CPU_HARTID, c908_cpus);
-
+    s->c908v_plic = k230_create_plic(C908V_CPU_HARTID, c908v_cpus);
     /* CLINT */
     riscv_aclint_swi_create(memmap[K230_DEV_CLINT].base,
-                            C908_CPU_HARTID, c908_cpus, false);
+                            C908_CPU_HARTID, total_cpus, false);
     riscv_aclint_mtimer_create(memmap[K230_DEV_CLINT].base + 0x4000,
                                RISCV_ACLINT_DEFAULT_MTIMER_SIZE,
-                               C908_CPU_HARTID, c908_cpus,
+                               C908_CPU_HARTID, total_cpus,
                                RISCV_ACLINT_DEFAULT_MTIMECMP,
                                RISCV_ACLINT_DEFAULT_MTIME,
                                RISCV_ACLINT_DEFAULT_TIMEBASE_FREQ, true);
@@ -461,6 +474,7 @@ static void k230_machine_class_init(ObjectClass *oc, const void *data)
 
     mc->desc = "RISC-V Board compatible with kendryte K230 SDK";
     mc->init = k230_machine_init;
+    mc->max_cpus = 2;
     mc->default_cpus = 2;
     mc->default_ram_id = "riscv.K230.ram"; /* DDR */
     mc->default_ram_size = memmap[K230_DEV_DDRC].size;
