@@ -31,6 +31,7 @@
 #include "hw/watchdog/k230_wdt.h"
 
 #define C908_CPU_HARTID   (0)
+#define C908V_CPU_HARTID  (1)
 
 #define TYPE_RISCV_K230_SOC "riscv.k230.soc"
 #define RISCV_K230_SOC(obj) \
@@ -42,12 +43,14 @@ typedef struct K230SoCState {
 
     /*< public >*/
     RISCVHartArrayState c908_cpu; /* Small core */
+    RISCVHartArrayState c908v_cpu; /* Big core */
 
     K230WdtState wdt[2];
     MemoryRegion sram;
     MemoryRegion bootrom;
 
     DeviceState *c908_plic;
+    DeviceState *c908v_plic;
 } K230SoCState;
 
 #define TYPE_RISCV_K230_MACHINE MACHINE_TYPE_NAME("k230")
