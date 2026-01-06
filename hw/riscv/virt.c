@@ -32,6 +32,7 @@
 #include "hw/core/sysbus-fdt.h"
 #include "target/riscv/pmu.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/riscv/riscv_debug.h"
 #include "hw/riscv/iommu.h"
 #include "hw/riscv/riscv-iommu-bits.h"
 #include "hw/riscv/virt.h"
@@ -1548,6 +1549,14 @@ static void virt_machine_init(MachineState *machine)
         exit(1);
     }
 
+    if (s->dm_chardev) {
+        DeviceState *dbg = qdev_new(TYPE_RISCV_DEBUG_MODULE);
+
+        qdev_prop_set_chr(dbg, "chardev", s->dm_chardev);
+        sysbus_realize(SYS_BUS_DEVICE(dbg), &error_fatal);
+        s->debug_module = dbg;
+    }
+
     /* Initialize sockets */
     mmio_irqchip = virtio_irqchip = pcie_irqchip = NULL;
     for (i = 0; i < socket_count; i++) {
@@ -1579,6 +1588,10 @@ static void virt_machine_init(MachineState *machine)
         object_property_set_int(OBJECT(&s->soc[i]), "num-harts",
                                 hart_count, &error_abort);
         sysbus_realize(SYS_BUS_DEVICE(&s->soc[i]), &error_fatal);
+        if (s->debug_module) {
+            riscv_debug_module_add_hart_array(
+                RISCV_DEBUG_MODULE(s->debug_module), &s->soc[i]);
+        }
 
         if (virt_aclint_allowed() && s->have_aclint) {
             if (s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC) {
@@ -1756,6 +1769,8 @@ static void virt_machine_instance_init(Object *obj)
     s->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);
     s->acpi = ON_OFF_AUTO_AUTO;
     s->iommu_sys = ON_OFF_AUTO_AUTO;
+    s->debug_module = NULL;
+    s->dm_chardev = NULL;
 }
 
 static char *virt_get_aia_guests(Object *obj, Error **errp)
@@ -1978,6 +1993,14 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                               NULL, NULL);
     object_class_property_set_description(oc, "iommu-sys",
                                           "Enable IOMMU platform device");
+
+    object_class_property_add_link(oc, "debug-chardev", TYPE_CHARDEV,
+                                   offsetof(RISCVVirtState, dm_chardev),
+                                   object_property_allow_set_link,
+                                   OBJ_PROP_LINK_STRONG);
+    object_class_property_set_description(oc, "debug-chardev",
+                                          "Chardev for RISC-V Debug Module "
+                                          "remote bitbang interface");
 }
 
 static const TypeInfo virt_machine_typeinfo = {
