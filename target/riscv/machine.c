@@ -248,6 +248,10 @@ static const VMStateDescription vmstate_debug = {
         VMSTATE_UINTTL_ARRAY(env.tdata1, RISCVCPU, RV_MAX_TRIGGERS),
         VMSTATE_UINTTL_ARRAY(env.tdata2, RISCVCPU, RV_MAX_TRIGGERS),
         VMSTATE_UINTTL_ARRAY(env.tdata3, RISCVCPU, RV_MAX_TRIGGERS),
+        VMSTATE_BOOL(env.debug_mode, RISCVCPU),
+        VMSTATE_UINTTL(env.dcsr, RISCVCPU),
+        VMSTATE_UINTTL(env.dpc, RISCVCPU),
+        VMSTATE_UINTTL_ARRAY(env.dscratch, RISCVCPU, 2),
         VMSTATE_END_OF_LIST()
     }
 };
