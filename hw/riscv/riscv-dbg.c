@@ -14,6 +14,7 @@
 #include "qemu/bswap.h"
 #include "hw/riscv/riscv_debug.h"
 #include "hw/riscv/riscv_hart.h"
+#include "hw/riscv/riscv-debug-rom.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties-system.h"
 #include "hw/qdev-properties.h"
@@ -125,9 +126,141 @@
 
 #define DMI_ADDR_BITS                  7
 #define DM_MAX_HARTS                  4096
-#define DM_DATA_COUNT                   2
-#define DM_PROGBUF_COUNT               0
+#define DM_DATA_COUNT                   4
+#define DM_PROGBUF_COUNT                2
+#define DM_ABSTRACT_COUNT              24
+#define DM_IMPEBREAK                    0
+#define DM_PROGBUF_IMPEBREAK_WORDS     (DM_IMPEBREAK ? 1 : 0)
+#define DM_PROGBUF_WORDS               (DM_PROGBUF_COUNT + DM_PROGBUF_IMPEBREAK_WORDS)
+#define DM_PROGBUF_BYTES               (DM_PROGBUF_WORDS * 4)
+#define DM_DEBUG_PROGBUF_START         (DEBUG_ROM_DATA_START - DM_PROGBUF_BYTES)
+#define DM_DEBUG_ABSTRACT_START        (DM_DEBUG_PROGBUF_START - DM_ABSTRACT_COUNT * 4)
+#define DM_DATA_BASE                   DEBUG_ROM_DATA_START
+#define DM_DATA_BYTES                  (DM_DATA_COUNT * 4)
+#define DM_ROM_JUMP_OFFSET             (DM_DEBUG_ABSTRACT_START - DEBUG_ROM_WHERETO)
 #define DM_MAX_REMOTE_BUF          (64 * KiB)
+#define AC_ACCESS_MEMORY_AAMSIZE_SHIFT      20
+#define AC_ACCESS_MEMORY_AAMSIZE_MASK       0x7
+#define AC_ACCESS_MEMORY_AAMPOSTINCREMENT   BIT(19)
+#define AC_ACCESS_MEMORY_AAMVIRTUAL         BIT(23)
+#define AC_ACCESS_MEMORY_WRITE              BIT(16)
+
+#ifndef CSR_DSCRATCH0
+#define CSR_DSCRATCH0 0x7b2
+#endif
+#ifndef CSR_DSCRATCH1
+#define CSR_DSCRATCH1 0x7b3
+#endif
+
+enum {
+    RISCV_REG_ZERO = 0,
+    RISCV_REG_RA = 1,
+    RISCV_REG_SP = 2,
+    RISCV_REG_GP = 3,
+    RISCV_REG_TP = 4,
+    RISCV_REG_T0 = 5,
+    RISCV_REG_T1 = 6,
+    RISCV_REG_T2 = 7,
+    RISCV_REG_S0 = 8,
+    RISCV_REG_S1 = 9,
+};
+
+static inline uint32_t riscv_insn_itype(uint32_t opcode, uint32_t rd,
+                                        uint32_t funct3, uint32_t rs1,
+                                        int32_t imm)
+{
+    uint32_t simm = (uint32_t)imm & 0xfff;
+    return (simm << 20) | (rs1 << 15) | (funct3 << 12) |
+           (rd << 7) | opcode;
+}
+
+static inline uint32_t riscv_insn_stype(uint32_t opcode, uint32_t funct3,
+                                        uint32_t rs1, uint32_t rs2,
+                                        int32_t imm)
+{
+    uint32_t simm = (uint32_t)imm & 0xfff;
+    uint32_t imm11_5 = (simm >> 5) & 0x7f;
+    uint32_t imm4_0 = simm & 0x1f;
+    return (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) |
+           (funct3 << 12) | (imm4_0 << 7) | opcode;
+}
+
+static inline uint32_t riscv_insn_utype(uint32_t opcode, uint32_t rd,
+                                        int32_t imm)
+{
+    uint32_t uimm = (uint32_t)imm & 0xfffff000u;
+    return uimm | (rd << 7) | opcode;
+}
+
+static inline uint32_t riscv_insn_rtype(uint32_t opcode, uint32_t rd,
+                                        uint32_t funct3, uint32_t rs1,
+                                        uint32_t rs2, uint32_t funct7)
+{
+    return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) |
+           (funct3 << 12) | (rd << 7) | opcode;
+}
+
+static inline uint32_t riscv_insn_jal(uint32_t rd, int32_t offset)
+{
+    uint32_t simm = (uint32_t)offset;
+    uint32_t imm20 = (simm >> 20) & 0x1;
+    uint32_t imm10_1 = (simm >> 1) & 0x3ff;
+    uint32_t imm11 = (simm >> 11) & 0x1;
+    uint32_t imm19_12 = (simm >> 12) & 0xff;
+    uint32_t value = 0;
+
+    value |= imm20 << 31;
+    value |= imm19_12 << 12;
+    value |= imm11 << 20;
+    value |= imm10_1 << 21;
+    value |= (rd << 7) | 0x6f;
+    return value;
+}
+
+static inline uint32_t riscv_insn_addi(uint32_t rd, uint32_t rs1, int32_t imm)
+{
+    return riscv_insn_itype(0x13, rd, 0x0, rs1, imm);
+}
+
+static inline uint32_t riscv_insn_lw(uint32_t rd, uint32_t rs1, int32_t imm)
+{
+    return riscv_insn_itype(0x03, rd, 0x2, rs1, imm);
+}
+
+static inline uint32_t riscv_insn_sw(uint32_t rs2, uint32_t rs1, int32_t imm)
+{
+    return riscv_insn_stype(0x23, 0x2, rs1, rs2, imm);
+}
+
+static inline uint32_t riscv_insn_ld(uint32_t rd, uint32_t rs1, int32_t imm)
+{
+    return riscv_insn_itype(0x03, rd, 0x3, rs1, imm);
+}
+
+static inline uint32_t riscv_insn_sd(uint32_t rs2, uint32_t rs1, int32_t imm)
+{
+    return riscv_insn_stype(0x23, 0x3, rs1, rs2, imm);
+}
+
+static inline uint32_t riscv_insn_lui(uint32_t rd, int32_t imm)
+{
+    return riscv_insn_utype(0x37, rd, imm);
+}
+
+static inline uint32_t riscv_insn_csrr(uint32_t rd, uint32_t csr)
+{
+    return riscv_insn_itype(0x73, rd, 0x2, RISCV_REG_ZERO, csr);
+}
+
+static inline uint32_t riscv_insn_csrw(uint32_t csr, uint32_t rs)
+{
+    return riscv_insn_itype(0x73, RISCV_REG_ZERO, 0x1, rs, csr);
+}
+
+static inline uint32_t riscv_insn_ebreak(void)
+{
+    return 0x00100073;
+}
 
 typedef enum DMICommandError {
     CMDERR_NONE = 0,
@@ -160,6 +293,7 @@ typedef struct RISCVDMHartState {
     RISCVCPU *cpu;
     CPUState *cs;
     RISCVDebugModuleState *dm;
+    uint32_t hartid;
     bool halted;
     bool resumeack;
     bool havereset;
@@ -246,10 +380,18 @@ struct RISCVDebugModuleState {
     uint32_t abstractauto;
     uint32_t command;
     uint32_t data[DM_DATA_COUNT];
+    uint32_t progbuf[DM_PROGBUF_COUNT];
+    uint32_t abstract[DM_ABSTRACT_COUNT];
+    uint32_t command_hartid;
+    bool command_active;
 
     RISCVDMSystemBus sba;
     RISCVDTMState dtm;
     bool reset_notifier_registered;
+    MemoryRegion debug_mem;
+    bool debug_mem_mapped;
+    uint32_t rom_whereto;
+    uint8_t rom_flags[DM_MAX_HARTS];
 };
 
 static void riscv_dm_execute_command(RISCVDebugModuleState *s, uint32_t command);
@@ -262,6 +404,222 @@ static void riscv_dm_note_hart_reset(RISCVDMHartState *hart);
 static void riscv_dm_reset_hart(RISCVDebugModuleState *s,
                                 RISCVDMHartState *hart);
 static void riscv_dm_machine_reset(void *opaque);
+static void riscv_dm_debug_mem_map(RISCVDebugModuleState *s);
+static void riscv_dm_set_cmderr(RISCVDebugModuleState *s,
+                                DMICommandError err);
+static RISCVDMHartState *riscv_dm_hart_by_id(RISCVDebugModuleState *s,
+                                             uint32_t hartid);
+static void riscv_dm_set_flag(RISCVDebugModuleState *s, uint32_t hartid,
+                              unsigned flag);
+static void riscv_dm_clear_flag(RISCVDebugModuleState *s, uint32_t hartid,
+                                unsigned flag);
+
+static uint64_t riscv_dm_debug_mem_read(void *opaque, hwaddr addr,
+                                        unsigned size);
+static void riscv_dm_debug_mem_write(void *opaque, hwaddr addr,
+                                     uint64_t value, unsigned size);
+static inline unsigned riscv_dm_arg_words(unsigned xlen)
+{
+    return xlen == 64 ? 2 : 1;
+}
+
+static inline uint64_t riscv_dm_read_arg(RISCVDebugModuleState *s,
+                                         unsigned arg, unsigned xlen)
+{
+    unsigned words = riscv_dm_arg_words(xlen);
+    unsigned index = arg * words;
+    uint64_t value = s->data[index];
+
+    if (words > 1 && index + 1 < DM_DATA_COUNT) {
+        value |= (uint64_t)s->data[index + 1] << 32;
+    }
+    return value;
+}
+
+static inline void riscv_dm_write_arg(RISCVDebugModuleState *s,
+                                      unsigned arg, unsigned xlen,
+                                      uint64_t value)
+{
+    unsigned words = riscv_dm_arg_words(xlen);
+    unsigned index = arg * words;
+
+    s->data[index] = value & 0xffffffffu;
+    if (words > 1 && index + 1 < DM_DATA_COUNT) {
+        s->data[index + 1] = (value >> 32) & 0xffffffffu;
+    }
+}
+
+static inline void riscv_dm_clear_abstract(RISCVDebugModuleState *s)
+{
+    memset(s->abstract, 0, sizeof(s->abstract));
+}
+
+static inline bool riscv_dm_append_insn(RISCVDebugModuleState *s,
+                                        unsigned *index, uint32_t insn)
+{
+    if (*index >= DM_ABSTRACT_COUNT) {
+        riscv_dm_set_cmderr(s, CMDERR_OTHER);
+        return false;
+    }
+    s->abstract[*index] = insn;
+    (*index)++;
+    return true;
+}
+
+static const MemoryRegionOps riscv_dm_debug_mem_ops = {
+    .read = riscv_dm_debug_mem_read,
+    .write = riscv_dm_debug_mem_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+    },
+};
+
+static void riscv_dm_debug_mem_map(RISCVDebugModuleState *s)
+{
+    if (s->debug_mem_mapped) {
+        return;
+    }
+    memory_region_init_io(&s->debug_mem, OBJECT(s),
+                          &riscv_dm_debug_mem_ops, s,
+                          "riscv.dm-debug", DEBUG_ROM_SIZE);
+    memory_region_add_subregion(get_system_memory(), DEBUG_START,
+                                &s->debug_mem);
+    s->debug_mem_mapped = true;
+}
+
+static void riscv_dm_debug_rom_halted(RISCVDebugModuleState *s,
+                                      uint32_t hartid)
+{
+    RISCVDMHartState *hart = riscv_dm_hart_by_id(s, hartid);
+
+    if (!hart) {
+        return;
+    }
+
+    hart->halted = true;
+    hart->resumeack = false;
+    hart->halt_pending = false;
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "dm halted hart=%u go=%u active=%d\n",
+                  hartid,
+                  !!(s->rom_flags[hartid] & BIT(DEBUG_ROM_FLAG_GO)),
+                  s->command_active);
+    if (s->command_active && s->command_hartid == hartid &&
+        !(s->rom_flags[hartid] & BIT(DEBUG_ROM_FLAG_GO))) {
+        s->abstractcs &= ~DM_ABSTRACTCS_BUSY;
+        s->command_active = false;
+    }
+}
+
+static void riscv_dm_debug_rom_resuming(RISCVDebugModuleState *s,
+                                        uint32_t hartid)
+{
+    RISCVDMHartState *hart = riscv_dm_hart_by_id(s, hartid);
+
+    if (!hart) {
+        return;
+    }
+
+    hart->halted = false;
+    hart->resumeack = true;
+    hart->resume_pending = false;
+    riscv_dm_clear_flag(s, hartid, DEBUG_ROM_FLAG_RESUME);
+}
+
+static uint64_t riscv_dm_debug_mem_read(void *opaque, hwaddr addr,
+                                        unsigned size)
+{
+    RISCVDebugModuleState *s = opaque;
+    uint64_t value = 0;
+
+    if (addr >= DEBUG_ROM_ENTRY &&
+        addr + size <= DEBUG_ROM_ENTRY + riscv_debug_rom_raw_len) {
+        memcpy(&value, &riscv_debug_rom_raw[addr - DEBUG_ROM_ENTRY], size);
+        return extract64(value, 0, size * 8);
+    }
+
+    if (addr >= DEBUG_ROM_WHERETO &&
+        addr + size <= DEBUG_ROM_WHERETO + sizeof(s->rom_whereto)) {
+        memcpy(&value, (uint8_t *)&s->rom_whereto + (addr - DEBUG_ROM_WHERETO),
+               size);
+        return extract64(value, 0, size * 8);
+    }
+
+    if (addr >= DEBUG_ROM_FLAGS &&
+        addr + size <= DEBUG_ROM_FLAGS + DM_MAX_HARTS) {
+        hwaddr offset = addr - DEBUG_ROM_FLAGS;
+        if (offset < DM_MAX_HARTS) {
+            return s->rom_flags[offset];
+        }
+    }
+
+    if (addr >= DM_DEBUG_ABSTRACT_START &&
+        addr + size <= DM_DEBUG_ABSTRACT_START + DM_ABSTRACT_COUNT * 4) {
+        memcpy(&value,
+               (uint8_t *)s->abstract + (addr - DM_DEBUG_ABSTRACT_START), size);
+        return extract64(value, 0, size * 8);
+    }
+
+    if (DM_PROGBUF_BYTES &&
+        addr >= DM_DEBUG_PROGBUF_START &&
+        addr + size <= DM_DEBUG_PROGBUF_START + DM_PROGBUF_BYTES) {
+        memcpy(&value,
+               (uint8_t *)s->progbuf + (addr - DM_DEBUG_PROGBUF_START), size);
+        return extract64(value, 0, size * 8);
+    }
+
+    if (addr >= DM_DATA_BASE &&
+        addr + size <= DM_DATA_BASE + DM_DATA_BYTES) {
+        memcpy(&value, (uint8_t *)s->data + (addr - DM_DATA_BASE), size);
+        return extract64(value, 0, size * 8);
+    }
+
+    return 0;
+}
+
+static void riscv_dm_debug_mem_write(void *opaque, hwaddr addr,
+                                     uint64_t value, unsigned size)
+{
+    RISCVDebugModuleState *s = opaque;
+    uint32_t val32 = value;
+    uint64_t val64 = value;
+
+    if (size != 4) {
+        if (addr >= DM_DATA_BASE &&
+            addr + size <= DM_DATA_BASE + DM_DATA_BYTES) {
+            memcpy((uint8_t *)s->data + (addr - DM_DATA_BASE), &val64, size);
+        }
+        return;
+    }
+
+    switch (addr) {
+    case DEBUG_ROM_HALTED:
+        riscv_dm_debug_rom_halted(s, val32);
+        break;
+    case DEBUG_ROM_GOING:
+        riscv_dm_clear_flag(s, val32, DEBUG_ROM_FLAG_GO);
+        qemu_log_mask(LOG_GUEST_ERROR, "dm going hart=%u\n", val32);
+        break;
+    case DEBUG_ROM_RESUMING:
+        riscv_dm_debug_rom_resuming(s, val32);
+        break;
+    case DEBUG_ROM_EXCEPTION:
+        riscv_dm_set_cmderr(s, CMDERR_EXCEPTION);
+        break;
+    default:
+        if (addr >= DM_DATA_BASE &&
+            addr + size <= DM_DATA_BASE + DM_DATA_BYTES) {
+            memcpy((uint8_t *)s->data + (addr - DM_DATA_BASE), &val32, size);
+        }
+        break;
+    }
+}
 
 static inline uint32_t dmcontrol_hartsel(uint32_t value)
 {
@@ -278,14 +636,65 @@ static inline bool dmcs_is_busy(DMICommandError err, bool busy)
     return busy || err == CMDERR_BUSY;
 }
 
+static inline unsigned riscv_dm_selected_hartid(RISCVDebugModuleState *s)
+{
+    return dmcontrol_hartsel(s->dmcontrol);
+}
+
+static inline size_t riscv_dm_hart_index(RISCVDebugModuleState *s,
+                                         RISCVDMHartState *hart)
+{
+    return hart ? (hart - s->harts) : DM_MAX_HARTS;
+}
+
+static void riscv_dm_kick_hart(RISCVDMHartState *hart)
+{
+    if (!hart) {
+        return;
+    }
+    qemu_cpu_kick(hart->cs);
+}
+
+static void riscv_dm_set_flag(RISCVDebugModuleState *s, uint32_t hartid,
+                              unsigned flag)
+{
+    RISCVDMHartState *hart;
+
+    if (hartid >= DM_MAX_HARTS) {
+        return;
+    }
+    s->rom_flags[hartid] |= BIT(flag);
+    hart = riscv_dm_hart_by_id(s, hartid);
+    riscv_dm_kick_hart(hart);
+}
+
+static void riscv_dm_clear_flag(RISCVDebugModuleState *s, uint32_t hartid,
+                                unsigned flag)
+{
+    if (hartid >= DM_MAX_HARTS) {
+        return;
+    }
+    s->rom_flags[hartid] &= ~BIT(flag);
+}
+
+static RISCVDMHartState *riscv_dm_hart_by_id(RISCVDebugModuleState *s,
+                                             uint32_t hartid)
+{
+    size_t i;
+
+    for (i = 0; i < s->hart_count; i++) {
+        if (s->harts[i].hartid == hartid) {
+            return &s->harts[i];
+        }
+    }
+    return NULL;
+}
+
 static RISCVDMHartState *riscv_dm_selected_hart(RISCVDebugModuleState *s)
 {
     uint32_t hartsel = dmcontrol_hartsel(s->dmcontrol);
 
-    if (hartsel >= s->hart_count) {
-        return NULL;
-    }
-    return &s->harts[hartsel];
+    return riscv_dm_hart_by_id(s, hartsel);
 }
 
 static void riscv_dm_clear_errors(RISCVDebugModuleState *s)
@@ -323,27 +732,8 @@ static void riscv_dm_enter_debug_mode(CPUState *cs, run_on_cpu_data data)
     cs->halted = true;
     hart->halted = true;
     hart->resumeack = false;
-}
-
-static void riscv_dm_leave_debug_mode(CPUState *cs, run_on_cpu_data data)
-{
-    RISCVDMHartState *hart = data.host_ptr;
-    RISCVCPU *cpu = hart->cpu;
-    CPURISCVState *env = &cpu->env;
-    target_ulong resume_pc = env->dpc;
-
-    if (!hart->halted || !hart->resume_pending) {
-        hart->resume_pending = false;
-        return;
-    }
-
-    hart->resume_pending = false;
-    riscv_cpu_leave_debug_mode(env);
-    cs->halted = false;
-    hart->halted = false;
-    hart->resumeack = true;
-    env->pc = resume_pc;
-    cpu_resume(cs);
+    env->pc = DEBUG_ROM_ENTRY;
+    fprintf(stderr, "dm entered debug hart=%u\n", hart->hartid);
 }
 
 static void riscv_dm_schedule_halt(RISCVDebugModuleState *s,
@@ -353,6 +743,7 @@ static void riscv_dm_schedule_halt(RISCVDebugModuleState *s,
         return;
     }
     hart->halt_pending = true;
+    fprintf(stderr, "dm schedule halt hart=%u\n", hart->hartid);
     hart->halt_cause = cause;
     cpu_exit(hart->cs);
     async_run_on_cpu(hart->cs, riscv_dm_enter_debug_mode,
@@ -362,12 +753,26 @@ static void riscv_dm_schedule_halt(RISCVDebugModuleState *s,
 static void riscv_dm_schedule_resume(RISCVDebugModuleState *s,
                                      RISCVDMHartState *hart)
 {
+    uint32_t hartid;
+
     if (!hart || !hart->halted) {
         return;
     }
     hart->resume_pending = true;
-    async_run_on_cpu(hart->cs, riscv_dm_leave_debug_mode,
-                     RUN_ON_CPU_HOST_PTR(hart));
+    hartid = hart->hartid;
+    riscv_dm_set_flag(s, hartid, DEBUG_ROM_FLAG_RESUME);
+}
+
+static void riscv_dm_start_abstract_command(RISCVDebugModuleState *s,
+                                            RISCVDMHartState *hart)
+{
+    uint32_t hartid = hart->hartid;
+
+    s->abstractcs |= DM_ABSTRACTCS_BUSY;
+    s->command_hartid = hartid;
+    s->command_active = true;
+    s->rom_whereto = riscv_insn_jal(RISCV_REG_ZERO, DM_ROM_JUMP_OFFSET);
+    riscv_dm_set_flag(s, hartid, DEBUG_ROM_FLAG_GO);
 }
 
 static uint32_t riscv_dm_dmstatus(RISCVDebugModuleState *s)
@@ -448,6 +853,14 @@ static void riscv_dm_reset_module(RISCVDebugModuleState *s)
     for (i = 0; i < DM_DATA_COUNT; i++) {
         s->data[i] = 0;
     }
+    for (i = 0; i < DM_PROGBUF_COUNT; i++) {
+        s->progbuf[i] = 0;
+    }
+    for (i = 0; i < DM_ABSTRACT_COUNT; i++) {
+        s->abstract[i] = 0;
+    }
+    s->command_active = false;
+    s->command_hartid = 0;
     for (i = 0; i < s->hart_count; i++) {
         s->harts[i].resethaltreq = false;
         s->harts[i].halt_pending = false;
@@ -458,6 +871,8 @@ static void riscv_dm_reset_module(RISCVDebugModuleState *s)
     s->sba.sbcs = (1 << DM_SBCS_SBVERSION_SHIFT) |
                   (64 << DM_SBCS_SBASIZE_SHIFT) |
                   DM_SBCS_SBACCESS32 | DM_SBCS_SBACCESS64;
+    memset(s->rom_flags, 0, sizeof(s->rom_flags));
+    s->rom_whereto = riscv_insn_jal(RISCV_REG_ZERO, DM_ROM_JUMP_OFFSET);
 }
 
 static void riscv_dm_machine_reset(void *opaque)
@@ -468,6 +883,9 @@ static void riscv_dm_machine_reset(void *opaque)
     for (i = 0; i < s->hart_count; i++) {
         riscv_dm_note_hart_reset(&s->harts[i]);
     }
+    memset(s->rom_flags, 0, sizeof(s->rom_flags));
+    s->rom_whereto = riscv_insn_jal(RISCV_REG_ZERO, DM_ROM_JUMP_OFFSET);
+    s->command_active = false;
 }
 
 static void riscv_dm_reset_hart(RISCVDebugModuleState *s,
@@ -605,8 +1023,6 @@ static bool riscv_dm_sba_perform_write(RISCVDebugModuleState *s)
 static void riscv_dm_access_register(RISCVDebugModuleState *s, uint32_t command)
 {
     RISCVDMHartState *hart = riscv_dm_selected_hart(s);
-    RISCVCPU *cpu;
-    CPURISCVState *env;
     unsigned aarsize = (command >> AC_ACCESS_REGISTER_AARSIZE_SHIFT) &
                        AC_ACCESS_REGISTER_AARSIZE_MASK;
     unsigned regno = command & AC_ACCESS_REGISTER_REGNO_MASK;
@@ -615,14 +1031,12 @@ static void riscv_dm_access_register(RISCVDebugModuleState *s, uint32_t command)
     bool postexec = command & AC_ACCESS_REGISTER_POSTEXEC;
     bool postinc = command & AC_ACCESS_REGISTER_AARPOSTINCREMENT;
     unsigned xlen_bits;
-    uint64_t value = 0;
+    unsigned idx = 0;
 
     if (!hart) {
         riscv_dm_set_cmderr(s, CMDERR_OTHER);
         return;
     }
-    cpu = hart->cpu;
-    env = &cpu->env;
 
     if (!hart->halted) {
         riscv_dm_set_cmderr(s, CMDERR_HALTRESUME);
@@ -633,13 +1047,11 @@ static void riscv_dm_access_register(RISCVDebugModuleState *s, uint32_t command)
         return;
     }
 
-    switch (riscv_cpu_mxl(env)) {
-    case MXL_RV32:
-        xlen_bits = 32;
-        break;
+    switch (riscv_cpu_mxl(&hart->cpu->env)) {
     case MXL_RV64:
         xlen_bits = 64;
         break;
+    case MXL_RV32:
     default:
         xlen_bits = 32;
         break;
@@ -651,44 +1063,162 @@ static void riscv_dm_access_register(RISCVDebugModuleState *s, uint32_t command)
         return;
     }
 
-    value = s->data[0];
-    if (xlen_bits == 64 && DM_DATA_COUNT > 1) {
-        value |= ((uint64_t)s->data[1]) << 32;
+    riscv_dm_clear_abstract(s);
+    if (!riscv_dm_append_insn(s, &idx,
+                              riscv_insn_csrw(CSR_DSCRATCH0, RISCV_REG_S0))) {
+        return;
     }
 
     if (regno < 0x1000) {
-        target_ulong tmp;
-        RISCVException ret;
-
         if (write) {
-            ret = riscv_csrrw_debug(env, regno, NULL, value, MAKE_64BIT_MASK(0, xlen_bits));
+            if (!riscv_dm_append_insn(s, &idx,
+                                      xlen_bits == 64 ?
+                                      riscv_insn_ld(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE) :
+                                      riscv_insn_lw(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE))) {
+                return;
+            }
+            if (!riscv_dm_append_insn(s, &idx,
+                                      riscv_insn_csrw(regno, RISCV_REG_S0))) {
+                return;
+            }
         } else {
-            ret = riscv_csrrw_debug(env, regno, &tmp, 0, 0);
-            value = tmp;
-        }
-
-        if (ret != RISCV_EXCP_NONE) {
-            riscv_dm_set_cmderr(s, CMDERR_OTHER);
-            return;
+            if (!riscv_dm_append_insn(s, &idx,
+                                      riscv_insn_csrr(RISCV_REG_S0, regno))) {
+                return;
+            }
+            if (!riscv_dm_append_insn(s, &idx,
+                                      xlen_bits == 64 ?
+                                      riscv_insn_sd(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE) :
+                                      riscv_insn_sw(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE))) {
+                return;
+            }
         }
     } else if (regno >= 0x1000 && regno < 0x1020) {
-        unsigned idx = regno - 0x1000;
+        unsigned reg = regno - 0x1000;
 
         if (write) {
-            env->gpr[idx] = value;
+            if (!riscv_dm_append_insn(s, &idx,
+                                      xlen_bits == 64 ?
+                                      riscv_insn_ld(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE) :
+                                      riscv_insn_lw(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE))) {
+                return;
+            }
+            if (!riscv_dm_append_insn(s, &idx,
+                                      riscv_insn_addi(reg, RISCV_REG_S0, 0))) {
+                return;
+            }
         } else {
-            value = env->gpr[idx];
+            if (!riscv_dm_append_insn(s, &idx,
+                                      riscv_insn_addi(RISCV_REG_S0, reg, 0))) {
+                return;
+            }
+            if (!riscv_dm_append_insn(s, &idx,
+                                      xlen_bits == 64 ?
+                                      riscv_insn_sd(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE) :
+                                      riscv_insn_sw(RISCV_REG_S0,
+                                                    RISCV_REG_ZERO,
+                                                    DM_DATA_BASE))) {
+                return;
+            }
         }
     } else {
         riscv_dm_set_cmderr(s, CMDERR_NOTSUP);
         return;
     }
 
-    if (!write) {
-        s->data[0] = value & 0xffffffffu;
-        if (DM_DATA_COUNT > 1) {
-            s->data[1] = (value >> 32) & 0xffffffffu;
+    if (!riscv_dm_append_insn(s, &idx,
+                              riscv_insn_csrr(RISCV_REG_S0, CSR_DSCRATCH0))) {
+        return;
+    }
+    if (!riscv_dm_append_insn(s, &idx, riscv_insn_ebreak())) {
+        return;
+    }
+    riscv_dm_start_abstract_command(s, hart);
+}
+
+static void riscv_dm_access_memory(RISCVDebugModuleState *s, uint32_t command)
+{
+    RISCVDMHartState *hart = riscv_dm_selected_hart(s);
+    unsigned aamsize = (command >> AC_ACCESS_MEMORY_AAMSIZE_SHIFT) &
+                       AC_ACCESS_MEMORY_AAMSIZE_MASK;
+    bool postincrement = command & AC_ACCESS_MEMORY_AAMPOSTINCREMENT;
+    bool aamvirtual = command & AC_ACCESS_MEMORY_AAMVIRTUAL;
+    bool write = command & AC_ACCESS_MEMORY_WRITE;
+    unsigned xlen_bits;
+    unsigned size_bytes;
+    uint64_t addr;
+    uint8_t buf[8] = { 0 };
+    MemTxResult res;
+    uint64_t value;
+
+    if (!hart) {
+        riscv_dm_set_cmderr(s, CMDERR_OTHER);
+        return;
+    }
+    if (!hart->halted) {
+        riscv_dm_set_cmderr(s, CMDERR_HALTRESUME);
+        return;
+    }
+    if (aamvirtual || aamsize > 3) {
+        riscv_dm_set_cmderr(s, CMDERR_NOTSUP);
+        return;
+    }
+
+    switch (riscv_cpu_mxl(&hart->cpu->env)) {
+    case MXL_RV64:
+        xlen_bits = 64;
+        break;
+    case MXL_RV32:
+    default:
+        xlen_bits = 32;
+        break;
+    }
+
+    size_bytes = 1u << aamsize;
+    addr = riscv_dm_read_arg(s, 1, xlen_bits);
+    if (write) {
+        unsigned i;
+
+        value = riscv_dm_read_arg(s, 0, xlen_bits);
+        for (i = 0; i < size_bytes; i++) {
+            buf[i] = (value >> (8 * i)) & 0xff;
         }
+        res = address_space_write(&address_space_memory, addr,
+                                  MEMTXATTRS_UNSPECIFIED, buf, size_bytes);
+    } else {
+        unsigned i;
+
+        res = address_space_read(&address_space_memory, addr,
+                                 MEMTXATTRS_UNSPECIFIED, buf, size_bytes);
+        value = 0;
+        for (i = 0; i < size_bytes; i++) {
+            value |= (uint64_t)buf[i] << (8 * i);
+        }
+        riscv_dm_write_arg(s, 0, xlen_bits, value);
+    }
+
+    if (res != MEMTX_OK) {
+        riscv_dm_set_cmderr(s, CMDERR_OTHER);
+        return;
+    }
+
+    if (postincrement) {
+        addr += size_bytes;
+        riscv_dm_write_arg(s, 1, xlen_bits, addr);
     }
 }
 
@@ -705,18 +1235,17 @@ static void riscv_dm_execute_command(RISCVDebugModuleState *s, uint32_t command)
         return;
     }
 
-    s->abstractcs |= DM_ABSTRACTCS_BUSY;
-
     switch (cmdtype) {
     case DM_CMD_ACCESS_REGISTER:
         riscv_dm_access_register(s, command);
+        break;
+    case DM_CMD_ACCESS_MEMORY:
+        riscv_dm_access_memory(s, command);
         break;
     default:
         riscv_dm_set_cmderr(s, CMDERR_NOTSUP);
         break;
     }
-
-    s->abstractcs &= ~DM_ABSTRACTCS_BUSY;
 }
 
 static bool riscv_dm_dmi_read(RISCVDebugModuleState *s, unsigned address,
@@ -731,6 +1260,18 @@ static bool riscv_dm_dmi_read(RISCVDebugModuleState *s, unsigned address,
         }
         *value = s->data[index];
         riscv_dm_try_autoexec(s, index);
+        return true;
+    }
+
+    if (address >= DM_PROGBUF0 &&
+        address < DM_PROGBUF0 + DM_PROGBUF_COUNT) {
+        unsigned index = address - DM_PROGBUF0;
+
+        if (s->abstractcs & DM_ABSTRACTCS_BUSY) {
+            riscv_dm_set_cmderr(s, CMDERR_BUSY);
+            return false;
+        }
+        *value = s->progbuf[index];
         return true;
     }
 
@@ -809,9 +1350,7 @@ static void riscv_dm_write_dmcontrol(RISCVDebugModuleState *s, uint32_t value)
                              DM_DMCONTROL_RESUMEREQ);
     s->dmcontrol |= DM_DMCONTROL_DMACTIVE;
 
-    if (hartsel < s->hart_count) {
-        hart = &s->harts[hartsel];
-    }
+    hart = riscv_dm_hart_by_id(s, hartsel);
 
     if ((value & DM_DMCONTROL_ACKHAVERESET) && hart) {
         hart->havereset = false;
@@ -852,6 +1391,18 @@ static bool riscv_dm_dmi_write(RISCVDebugModuleState *s, unsigned address,
         return true;
     }
 
+    if (address >= DM_PROGBUF0 &&
+        address < DM_PROGBUF0 + DM_PROGBUF_COUNT) {
+        unsigned index = address - DM_PROGBUF0;
+
+        if (s->abstractcs & DM_ABSTRACTCS_BUSY) {
+            riscv_dm_set_cmderr(s, CMDERR_BUSY);
+            return false;
+        }
+        s->progbuf[index] = value;
+        return true;
+    }
+
     switch (address) {
     case DM_DMCONTROL:
         riscv_dm_write_dmcontrol(s, value);
@@ -873,7 +1424,7 @@ static bool riscv_dm_dmi_write(RISCVDebugModuleState *s, unsigned address,
         riscv_dm_execute_command(s, value);
         return true;
     case DM_ABSTRACTAUTO:
-        s->abstractauto = value & DM_ABSTRACTAUTO_AUTOEXECDATA_MASK;
+        s->abstractauto = value;
         return true;
     case DM_SBCS:
         if (value & DM_SBCS_SBBUSYERROR) {
@@ -919,7 +1470,9 @@ static void riscv_dtm_reset(RISCVDTMState *dtm)
     dtm->state = JTAG_TEST_LOGIC_RESET;
     dtm->busy_stuck = false;
     dtm->rti_remaining = 0;
-    dtm->dmi = 0;
+    dtm->dtmcontrol = (1 & DTMCONTROL_VERSION_MASK) |
+        ((DMI_ADDR_BITS & 0x3f) << DTMCONTROL_ABITS_SHIFT);
+    dtm->dmi = DMI_STATUS_SUCCESS;
     dtm->ir = DTM_IR_IDCODE;
     dtm->dr = 0;
     dtm->ir_length = 5;
@@ -928,6 +1481,7 @@ static void riscv_dtm_reset(RISCVDTMState *dtm)
     dtm->tms = false;
     dtm->tdi = false;
     dtm->tdo = false;
+    dtm->bypass = 0;
 }
 
 static void riscv_dtm_run_idle(RISCVDTMState *dtm)
@@ -968,6 +1522,10 @@ static void riscv_dtm_capture_dr(RISCVDebugModuleState *s)
         dtm->dr_length = 1;
         break;
     }
+
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "dtm capture: ir=0x%x value=0x%" PRIx64 " len=%u\n",
+                  dtm->ir, dtm->dr, dtm->dr_length);
 }
 
 static void riscv_dtm_update_dr(RISCVDebugModuleState *s)
@@ -981,7 +1539,8 @@ static void riscv_dtm_update_dr(RISCVDebugModuleState *s)
         if (dtm->dr & DTMCONTROL_DMIHARDRESET) {
             riscv_dtm_reset(dtm);
         }
-        dtm->dtmcontrol = dtm->dr;
+        dtm->dtmcontrol &= ~(DTMCONTROL_IDLE_MASK);
+        dtm->dtmcontrol |= dtm->dr & DTMCONTROL_IDLE_MASK;
         return;
     }
 
@@ -1080,10 +1639,6 @@ static void riscv_dtm_set_pins(RISCVDebugModuleState *s,
         case JTAG_CAPTURE_DR:
             riscv_dtm_capture_dr(s);
             break;
-    case JTAG_CAPTURE_IR:
-            dtm->ir = DTM_IR_IDCODE;
-            dtm->ir_length = 5;
-            break;
         case JTAG_SHIFT_DR:
             dtm->tdo = dtm->dr & 1;
             break;
@@ -1166,6 +1721,7 @@ static void riscv_debug_module_realize(DeviceState *dev, Error **errp)
     riscv_dm_reset_module(s);
     riscv_dtm_reset(&s->dtm);
     s->dtm.dm = s;
+    riscv_dm_debug_mem_map(s);
     if (!s->reset_notifier_registered) {
         qemu_register_reset(riscv_dm_machine_reset, s);
         s->reset_notifier_registered = true;
@@ -1185,6 +1741,10 @@ static void riscv_debug_module_unrealize(DeviceState *dev)
     if (s->reset_notifier_registered) {
         qemu_unregister_reset(riscv_dm_machine_reset, s);
         s->reset_notifier_registered = false;
+    }
+    if (s->debug_mem_mapped) {
+        memory_region_del_subregion(get_system_memory(), &s->debug_mem);
+        s->debug_mem_mapped = false;
     }
     qemu_chr_fe_deinit(&s->chr, true);
     g_free(s->harts);
@@ -1238,6 +1798,7 @@ void riscv_debug_module_add_hart_array(RISCVDebugModuleState *s,
         hart->cpu = &array->harts[i];
         hart->cs = CPU(hart->cpu);
         hart->dm = s;
+        hart->hartid = hart->cpu->env.mhartid;
         hart->halted = false;
         hart->resumeack = false;
         hart->havereset = true;
@@ -1245,5 +1806,6 @@ void riscv_debug_module_add_hart_array(RISCVDebugModuleState *s,
         hart->halt_pending = false;
         hart->resume_pending = false;
         hart->halt_cause = DCSR_CAUSE_OTHER;
+        fprintf(stderr, "dm add hart idx=%zu id=%u\n", old + i, hart->hartid);
     }
 }
