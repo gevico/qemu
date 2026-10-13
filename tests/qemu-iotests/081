@@ -19,8 +19,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=benoit@irqsave.net
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -44,6 +42,7 @@ _supported_proto file
 _supported_os Linux
 _require_drivers quorum
 _require_devices virtio-scsi
+_require_hmp
 
 do_run_qemu()
 {

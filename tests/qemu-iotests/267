@@ -19,8 +19,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=kwolf@redhat.com
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -48,6 +46,7 @@ _require_drivers copy-on-read
 _unsupported_imgopts 'refcount_bits=1[^0-9]' data_file
 
 _require_devices virtio-blk
+_require_hmp
 
 do_run_qemu()
 {

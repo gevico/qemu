@@ -130,6 +130,10 @@
 #define AST2600_HW_STRAP2_PROT    TO_REG(0x518)
 #define AST2600_RNG_CTRL          TO_REG(0x520)
 #define AST2600_RNG_DATA          TO_REG(0x524)
+#define AST2600_RNG2_CTRL         TO_REG(0x530)
+#define AST2600_RNG2_CTRL_MASK    0x3F
+#define AST2600_RNG2_CTRL_VLD     BIT(31)
+#define AST2600_RNG2_DATA         TO_REG(0x534)
 #define AST2600_CHIP_ID0          TO_REG(0x5B0)
 #define AST2600_CHIP_ID1          TO_REG(0x5B4)
 
@@ -679,13 +683,14 @@ static uint64_t aspeed_ast2600_scu_read(void *opaque, hwaddr offset,
         /* PLLs are always "locked" */
         return s->regs[reg] | BIT(31);
     case AST2600_RNG_DATA:
+    case AST2600_RNG2_DATA:
         /*
          * On hardware, RNG_DATA works regardless of the state of the
          * enable bit in RNG_CTRL
          *
          * TODO: Check this is true for ast2600
          */
-        s->regs[AST2600_RNG_DATA] = aspeed_scu_get_random();
+        s->regs[reg] = aspeed_scu_get_random();
         break;
     }
 
@@ -756,6 +761,7 @@ static void aspeed_ast2600_scu_write(void *opaque, hwaddr offset,
         return;
 
     case AST2600_RNG_DATA:
+    case AST2600_RNG2_DATA:
     case AST2600_SILICON_REV:
     case AST2600_SILICON_REV2:
     case AST2600_CHIP_ID0:
@@ -765,6 +771,14 @@ static void aspeed_ast2600_scu_write(void *opaque, hwaddr offset,
                       "%s: Write to read-only offset 0x%" HWADDR_PRIx "\n",
                       __func__, offset);
         return;
+    case AST2600_RNG2_CTRL:
+        data &= AST2600_RNG2_CTRL_MASK;
+        if (data & BIT(4)) {
+            data |= AST2600_RNG2_CTRL_VLD;
+        } else {
+            data &= ~AST2600_RNG2_CTRL_VLD;
+        }
+        break;
     }
 
     s->regs[reg] = data;
@@ -803,6 +817,7 @@ static const uint32_t ast2600_a3_resets[ASPEED_AST2600_SCU_NR_REGS] = {
     [AST2600_HUARTCLK]          = 0x000145C0,
     [AST2600_CHIP_ID0]          = 0x1234ABCD,
     [AST2600_CHIP_ID1]          = 0x88884444,
+    [AST2600_RNG2_CTRL]         = 0x8000000E,
 };
 
 static void aspeed_ast2600_scu_reset_hold(Object *obj, ResetType type)
@@ -821,7 +836,8 @@ static void aspeed_ast2600_scu_reset_hold(Object *obj, ResetType type)
     s->regs[AST2600_SILICON_REV2] = s->silicon_rev;
     s->regs[AST2600_HW_STRAP1] = s->hw_strap1;
     s->regs[AST2600_HW_STRAP2] = s->hw_strap2;
-    s->regs[PROT_KEY] = s->hw_prot_key;
+    s->regs[AST2600_PROT_KEY] = s->hw_prot_key == ASPEED_SCU_PROT_KEY;
+    s->regs[AST2600_PROT_KEY2] = s->hw_prot_key == ASPEED_SCU_PROT_KEY;
 }
 
 static void aspeed_2600_scu_class_init(ObjectClass *klass, const void *data)
@@ -930,6 +946,11 @@ static void aspeed_ast2700_scu_reset_hold(Object *obj, ResetType type)
     s->regs[AST2700_HW_STRAP1] = s->hw_strap1;
 }
 
+static void aspeed_2700_scu_realize(DeviceState *dev, Error **errp)
+{
+    aspeed_scu_realize(dev, errp);
+}
+
 static void aspeed_2700_scu_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -937,6 +958,7 @@ static void aspeed_2700_scu_class_init(ObjectClass *klass, const void *data)
     AspeedSCUClass *asc = ASPEED_SCU_CLASS(klass);
 
     dc->desc = "ASPEED 2700 System Control Unit";
+    dc->realize = aspeed_2700_scu_realize;
     rc->phases.hold = aspeed_ast2700_scu_reset_hold;
     asc->resets = ast2700_a0_resets;
     asc->calc_hpll = aspeed_2600_scu_calc_hpll;
@@ -1063,6 +1085,16 @@ static const uint32_t ast2700_a0_resets_io[ASPEED_AST2700_SCU_NR_REGS] = {
     [AST2700_SCUIO_FREQ_CNT_CTL]        = 0x00000080,
 };
 
+static void aspeed_ast2700_scuio_reset_hold(Object *obj, ResetType type)
+{
+    AspeedSCUState *s = ASPEED_SCU(obj);
+    AspeedSCUClass *asc = ASPEED_SCU_GET_CLASS(obj);
+
+    memcpy(s->regs, asc->resets, asc->nr_regs * 4);
+    s->regs[AST2700_SILICON_REV] = s->silicon_rev;
+    s->regs[AST2700_HW_STRAP1] = s->hw_strap1;
+}
+
 static void aspeed_2700_scuio_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -1070,7 +1102,7 @@ static void aspeed_2700_scuio_class_init(ObjectClass *klass, const void *data)
     AspeedSCUClass *asc = ASPEED_SCU_CLASS(klass);
 
     dc->desc = "ASPEED 2700 System Control Unit I/O";
-    rc->phases.hold = aspeed_ast2700_scu_reset_hold;
+    rc->phases.hold = aspeed_ast2700_scuio_reset_hold;
     asc->resets = ast2700_a0_resets_io;
     asc->calc_hpll = aspeed_2600_scu_calc_hpll;
     asc->get_apb = aspeed_2700_scuio_get_apb_freq;
@@ -1106,6 +1138,7 @@ static void aspeed_ast1030_scu_reset_hold(Object *obj, ResetType type)
     s->regs[AST2600_HW_STRAP1] = s->hw_strap1;
     s->regs[AST2600_HW_STRAP2] = s->hw_strap2;
     s->regs[PROT_KEY] = s->hw_prot_key;
+    s->regs[AST2600_RNG2_CTRL] = 0x8000000E;
 }
 
 static void aspeed_1030_scu_class_init(ObjectClass *klass, const void *data)
@@ -1161,7 +1194,7 @@ static const TypeInfo aspeed_scu_types[] = {
     {
         .name = TYPE_ASPEED_2700_SCU,
         .parent = TYPE_ASPEED_SCU,
-        .instance_size = sizeof(AspeedSCUState),
+        .instance_size = sizeof(Aspeed2700SCUState),
         .class_init = aspeed_2700_scu_class_init,
     },
     {

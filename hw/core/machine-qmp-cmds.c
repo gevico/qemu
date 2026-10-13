@@ -10,6 +10,7 @@
 #include "qemu/osdep.h"
 #include "hw/acpi/vmgenid.h"
 #include "hw/core/boards.h"
+#include "hw/core/nmi.h"
 #include "hw/intc/intc.h"
 #include "hw/mem/memory-device.h"
 #include "qapi/error.h"
@@ -98,7 +99,7 @@ MachineInfoList *qmp_query_machines(bool has_compat_props, bool compat_props,
     GSList *el, *machines;
     MachineInfoList *mach_list = NULL;
 
-    machines = object_class_get_list(target_machine_typename(), false);
+    machines = object_class_get_list(TYPE_MACHINE, false);
     for (el = machines; el; el = el->next) {
         MachineClass *mc = el->data;
         const char *default_cpu_type = machine_class_default_cpu_type(mc);
@@ -126,6 +127,7 @@ MachineInfoList *qmp_query_machines(bool has_compat_props, bool compat_props,
         if (mc->default_ram_id) {
             info->default_ram_id = g_strdup(mc->default_ram_id);
         }
+        info->secure = object_class_is_secure(OBJECT_CLASS(mc));
 
         if (compat_props && mc->compat_props) {
             int i;
@@ -447,4 +449,9 @@ void qmp_dump_skeys(const char *filename, Error **errp)
         return;
     }
     DUMP_SKEYS_INTERFACE_CLASS(oc)->qmp_dump_skeys(filename, errp);
+}
+
+void qmp_inject_nmi(Error **errp)
+{
+    nmi_inject(errp);
 }

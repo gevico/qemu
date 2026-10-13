@@ -247,11 +247,6 @@ static void pc_q35_init(MachineState *machine)
 
     x86ms->rtc = ISA_DEVICE(object_resolve_path_component(OBJECT(lpc), "rtc"));
 
-    object_property_add_link(OBJECT(machine), PC_MACHINE_ACPI_DEVICE_PROP,
-                             TYPE_HOTPLUG_HANDLER,
-                             (Object **)&x86ms->acpi_dev,
-                             object_property_allow_set_link,
-                             OBJ_PROP_LINK_STRONG);
     object_property_set_link(OBJECT(machine), PC_MACHINE_ACPI_DEVICE_PROP,
                              OBJECT(lpc), &error_abort);
 
@@ -383,12 +378,21 @@ static void pc_q35_machine_options(MachineClass *m)
                      pc_q35_compat_defaults, pc_q35_compat_defaults_len);
 }
 
-static void pc_q35_machine_11_1_options(MachineClass *m)
+static void pc_q35_machine_11_2_options(MachineClass *m)
 {
     pc_q35_machine_options(m);
 }
 
-DEFINE_Q35_MACHINE_AS_LATEST(11, 1);
+DEFINE_Q35_MACHINE_AS_LATEST(11, 2);
+
+static void pc_q35_machine_11_1_options(MachineClass *m)
+{
+    pc_q35_machine_11_2_options(m);
+    compat_props_add(m->compat_props, hw_compat_11_1, hw_compat_11_1_len);
+    compat_props_add(m->compat_props, pc_compat_11_1, pc_compat_11_1_len);
+}
+
+DEFINE_Q35_MACHINE(11, 1);
 
 static void pc_q35_machine_11_0_options(MachineClass *m)
 {

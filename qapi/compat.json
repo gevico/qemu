@@ -9,8 +9,7 @@
 
 ##
 # @CompatPolicyInput:
-#
-# Policy for handling "funny" input.
+#     Policy for handling "funny" input.
 #
 # @accept: Accept silently
 #
@@ -25,8 +24,7 @@
 
 ##
 # @CompatPolicyOutput:
-#
-# Policy for handling "funny" output.
+#     Policy for handling "funny" output.
 #
 # @accept: Pass on unchanged
 #
@@ -38,11 +36,26 @@
   'data': [ 'accept', 'hide' ] }
 
 ##
+# @CompatPolicySecurity:
+#     Policy for handling any devices or backends which do not provide
+#     a security boundary to protect against untrusted environments
+#
+# @accept: Allow any usage
+#
+# @reject: Reject with an error reported
+#
+# @warn: Allow any usage, with a warning reported
+#
+# Since: 11.2
+##
+{ 'enum': 'CompatPolicySecurity',
+  'data': [ 'accept', 'reject', 'warn' ] }
+
+##
 # @CompatPolicy:
+#     Policy for handling deprecated management interfaces.
 #
-# Policy for handling deprecated management interfaces.
-#
-# This is intended for testing users of the management interfaces.
+#     This is intended for testing users of the management interfaces.
 #
 # Limitation: covers only syntactic aspects of QMP, i.e. stuff tagged
 # with feature 'deprecated' or 'unstable'.  We may want to extend it
@@ -62,10 +75,14 @@
 # @unstable-output: how to handle unstable output (default 'accept')
 #     (since 6.2)
 #
+# @insecure-types: how to handle types that are not declared secure
+#     (default 'accept') (since 11.2)
+#
 # Since: 6.0
 ##
 { 'struct': 'CompatPolicy',
   'data': { '*deprecated-input': 'CompatPolicyInput',
             '*deprecated-output': 'CompatPolicyOutput',
             '*unstable-input': 'CompatPolicyInput',
-            '*unstable-output': 'CompatPolicyOutput' } }
+            '*unstable-output': 'CompatPolicyOutput',
+            '*insecure-types': 'CompatPolicySecurity' } }

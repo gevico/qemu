@@ -8,7 +8,6 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/arm/aspeed.h"
 #include "hw/arm/aspeed_soc.h"
 #include "hw/nvram/eeprom_at24c.h"
@@ -17,7 +16,7 @@
 
 #define TYPE_LM75 TYPE_TMP105
 #define TYPE_TMP421 "tmp421"
-#define FBY35_BMC_RAM_SIZE ASPEED_RAM_SIZE(2 * GiB)
+#define FBY35_BMC_RAM_SIZE (2 * GiB)
 
 static const uint8_t fby35_nic_fruid[] = {
     0x01, 0x00, 0x00, 0x01, 0x0f, 0x20, 0x00, 0xcf, 0x01, 0x0e, 0x19, 0xd7,
@@ -171,7 +170,6 @@ static const TypeInfo aspeed_ast2600_fby35_types[] = {
         .name          = MACHINE_TYPE_NAME("fby35-bmc"),
         .parent        = MACHINE_TYPE_NAME("ast2600-evb"),
         .class_init    = aspeed_machine_fby35_class_init,
-        .interfaces    = arm_machine_interfaces,
     }
 };
 

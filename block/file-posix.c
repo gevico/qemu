@@ -426,28 +426,48 @@ static void raw_probe_alignment(BlockDriverState *bs, int fd, Error **errp)
 
     bs->bl.request_alignment = 0;
     s->buf_align = 0;
-    /* Let's try to use the logical blocksize for the alignment. */
-    if (probe_logical_blocksize(fd, &bs->bl.request_alignment) < 0) {
-        bs->bl.request_alignment = 0;
+
+#if defined(__linux__) && defined(STATX_DIOALIGN)
+    struct statx stx;
+
+    /*
+     * Linux 6.1 introduced an interface for both block devices and file
+     * systems. The system call returns with the STATX_DIOALIGN bit cleared
+     * when the information is unavailable.
+     */
+    if (statx(fd, "", AT_EMPTY_PATH, STATX_DIOALIGN, &stx) == 0 &&
+        (stx.stx_mask & STATX_DIOALIGN)) {
+        bs->bl.request_alignment = stx.stx_dio_offset_align;
+        s->buf_align = stx.stx_dio_mem_align;
     }
+#endif /* defined(__linux__) && defined(STATX_DIOALIGN) */
 
 #ifdef __linux__
-    /*
-     * The XFS ioctl definitions are shipped in extra packages that might
-     * not always be available. Since we just need the XFS_IOC_DIOINFO ioctl
-     * here, we simply use our own definition instead:
-     */
-    struct xfs_dioattr {
-        uint32_t d_mem;
-        uint32_t d_miniosz;
-        uint32_t d_maxiosz;
-    } da;
-    if (ioctl(fd, _IOR('X', 30, struct xfs_dioattr), &da) >= 0) {
-        bs->bl.request_alignment = da.d_miniosz;
-        /* The kernel returns wrong information for d_mem */
-        /* s->buf_align = da.d_mem; */
+    if (!bs->bl.request_alignment) {
+        /*
+         * The XFS ioctl definitions are shipped in extra packages that might
+         * not always be available. Since we just need the XFS_IOC_DIOINFO ioctl
+         * here, we simply use our own definition instead:
+         */
+        struct xfs_dioattr {
+            uint32_t d_mem;
+            uint32_t d_miniosz;
+            uint32_t d_maxiosz;
+        } da;
+        if (ioctl(fd, _IOR('X', 30, struct xfs_dioattr), &da) >= 0) {
+            bs->bl.request_alignment = da.d_miniosz;
+            /* The kernel returns wrong information for d_mem */
+            /* s->buf_align = da.d_mem; */
+        }
     }
-#endif
+#endif /* __linux__ */
+
+    /* Let's try to use the logical blocksize for the alignment. */
+    if (!bs->bl.request_alignment) {
+        if (probe_logical_blocksize(fd, &bs->bl.request_alignment) < 0) {
+            bs->bl.request_alignment = 0;
+        }
+    }
 
     /*
      * If we could not get the sizes so far, we can only guess them. First try
@@ -793,18 +813,6 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
             goto fail;
         }
     }
-#ifdef CONFIG_BLKZONED
-    /*
-     * The kernel page cache does not reliably work for writes to SWR zones
-     * of zoned block device because it can not guarantee the order of writes.
-     */
-    if ((bs->bl.zoned != BLK_Z_NONE) &&
-        (!(s->open_flags & O_DIRECT))) {
-        error_setg(errp, "The driver supports zoned devices, and it requires "
-                         "cache.direct=on, which was not specified.");
-        return -EINVAL; /* No host kernel page cache */
-    }
-#endif
 
 #ifdef __FreeBSD__
     if (S_ISCHR(st.st_mode)) {
@@ -1455,6 +1463,16 @@ static void raw_refresh_zoned_limits(BlockDriverState *bs, struct stat *st,
     }
     bs->bl.zoned = zoned;
 
+    /*
+     * The kernel page cache does not reliably work for writes to SWR zones of
+     * zoned block devices because it can not guarantee the order of writes.
+     */
+    if (!(s->open_flags & O_DIRECT)) {
+        error_setg(errp, "The driver supports zoned devices, and it requires "
+                         "cache.direct=on, which was not specified.");
+        goto no_zoned;
+    }
+
     ret = get_sysfs_long_val(st, "max_open_zones");
     if (ret >= 0) {
         bs->bl.max_open_zones = ret;
@@ -1495,7 +1513,7 @@ static void raw_refresh_zoned_limits(BlockDriverState *bs, struct stat *st,
         bs->bl.max_append_sectors = ret >> BDRV_SECTOR_BITS;
     }
 
-    ret = get_sysfs_long_val(st, "physical_block_size");
+    ret = get_sysfs_long_val(st, "zone_write_granularity");
     if (ret >= 0) {
         bs->bl.write_granularity = ret;
     }
@@ -2368,7 +2386,7 @@ static int handle_aiocb_truncate(void *opaque)
     RawPosixAIOData *aiocb = opaque;
     int result = 0;
     int64_t current_length = 0;
-    char *buf = NULL;
+    QEMU_AUTO_VFREE char *buf = NULL;
     struct stat st;
     int fd = aiocb->aio_fildes;
     int64_t offset = aiocb->aio_offset;
@@ -2435,7 +2453,7 @@ static int handle_aiocb_truncate(void *opaque)
             goto out;
         }
 
-        buf = g_malloc0(65536);
+        buf = qemu_blockalign0(aiocb->bs, 65536);
 
         seek_result = lseek(fd, current_length, SEEK_SET);
         if (seek_result < 0) {
@@ -2494,7 +2512,6 @@ out:
         }
     }
 
-    g_free(buf);
     return result;
 }
 

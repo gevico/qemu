@@ -115,6 +115,7 @@ if have_block
   endif
   if host_os != 'windows'
     tests += {
+      'test-io-channel-websock': [io],
       'test-image-locking': [testblock],
       'test-nested-aio-poll': [],
     }
@@ -184,6 +185,12 @@ slow_tests = {
   'test-crypto-tlscredsx509': 90,
   'test-crypto-tlssession': 90,
   'test-replication': 60,
+  'rcutorture': 30,
+  'test-rcu-list': 30,
+  'test-rcu-simpleq': 30,
+  'test-rcu-tailq': 30,
+  'test-rcu-slist': 30,
+  'test-thread-pool': 30,
 }
 
 foreach test_name, extra: tests
@@ -205,5 +212,18 @@ foreach test_name, extra: tests
        protocol: 'tap',
        timeout: slow_tests.get(test_name, 30),
        priority: slow_tests.get(test_name, 30),
-       suite: ['unit'])
+       suite: ['unit'] +
+              (slow_tests.has_key(test_name) ? ['slow'] : []))
 endforeach
+
+# Multi targets test
+if multi_target_objects != []
+  test('test-multi-target',
+       executable('test-multi-target',
+                  sources: [multi_target_crates, files('test-multi-target.c')],
+                  dependencies: multi_target_deps,
+                  objects: multi_target_objects,
+                  link_depends: [block_syms, qemu_syms],
+                  link_args: multi_target_link_args),
+       suite: ['unit'])
+endif

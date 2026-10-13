@@ -19,8 +19,14 @@
  */
 
 #include "qemu/osdep.h"
+#ifdef CONFIG_USER_ONLY
+#include "qemu/rcu.h"
+#endif
 #include "cpu.h"
 #include "target/riscv/tcg/csr.h"
+#ifndef CONFIG_USER_ONLY
+#include "pmu.h"
+#endif
 #include "internals.h"
 #include "exec/cputlb.h"
 #include "accel/tcg/cpu-ldst.h"
@@ -47,6 +53,9 @@ G_NORETURN void riscv_raise_exception(CPURISCVState *env,
 
 void helper_raise_exception(CPURISCVState *env, uint32_t exception)
 {
+#ifndef CONFIG_USER_ONLY
+    riscv_pmu_decr_instret(env);
+#endif
     riscv_raise_exception(env, exception, 0);
 }
 
@@ -146,7 +155,16 @@ target_ulong helper_csrrw_i128(CPURISCVState *env, int csr,
 static void check_zicbo_envcfg(CPURISCVState *env, target_ulong envbits,
                                 uintptr_t ra)
 {
-#ifndef CONFIG_USER_ONLY
+#if defined(CONFIG_USER_ONLY)
+    /*
+     * linux-user: the machine-level envcfg fields are not part of the
+     * user-mode environment; only the user-mode view of the enabling
+     * bits (senvcfg, as initialized for the guest) applies.
+     */
+    if (!get_field(env->senvcfg, envbits)) {
+        riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, ra);
+    }
+#else
     if ((env->priv < PRV_M) && !get_field(env->menvcfg, envbits)) {
         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, ra);
     }
@@ -283,6 +301,38 @@ void helper_sc_probe_write(CPURISCVState *env, target_ulong addr,
     probe_write(env, addr, size, mmu_idx, ra);
 }
 
+#ifdef CONFIG_USER_ONLY
+
+void helper_riscv_invalidate_reservations(CPURISCVState *env,
+                                          target_ulong addr,
+                                          target_ulong size)
+{
+    CPUState *cpu;
+
+    /* EXCP_ATOMIC keeps other guest harts out while this list is updated. */
+    WITH_RCU_READ_LOCK_GUARD() {
+        CPU_FOREACH(cpu) {
+            CPURISCVState *other_env = cpu_env(cpu);
+            target_ulong reservation = other_env->load_res;
+            target_ulong reservation_size = other_env->load_res_size;
+            bool overlap;
+
+            if (other_env == env || reservation == (target_ulong)-1) {
+                continue;
+            }
+            overlap = reservation < addr
+                ? addr - reservation < reservation_size
+                : reservation - addr < size;
+            if (overlap) {
+                other_env->load_res = -1;
+                other_env->load_res_size = 0;
+            }
+        }
+    }
+}
+
+#endif
+
 #ifndef CONFIG_USER_ONLY
 
 target_ulong helper_sret(CPURISCVState *env)
@@ -292,6 +342,11 @@ target_ulong helper_sret(CPURISCVState *env)
     bool prev_virt = env->virt_enabled;
     const privilege_mode_t src_priv = env->priv;
     const bool src_virt = env->virt_enabled;
+
+    if ((env->virt_enabled && env->priv < PRV_S) ||
+        (env->virt_enabled && get_field(env->hstatus, HSTATUS_VTSR))) {
+        riscv_raise_exception(env, RISCV_EXCP_VIRT_INSTRUCTION_FAULT, GETPC());
+    }
 
     if (!(env->priv >= PRV_S)) {
         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
@@ -306,10 +361,6 @@ target_ulong helper_sret(CPURISCVState *env)
 
     if (get_field(env->mstatus, MSTATUS_TSR) && !(env->priv >= PRV_M)) {
         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
-    }
-
-    if (env->virt_enabled && get_field(env->hstatus, HSTATUS_VTSR)) {
-        riscv_raise_exception(env, RISCV_EXCP_VIRT_INSTRUCTION_FAULT, GETPC());
     }
 
     mstatus = env->mstatus;

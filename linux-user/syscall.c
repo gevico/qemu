@@ -2119,6 +2119,15 @@ static abi_long do_setsockopt(int sockfd, int level, int optname,
     abi_long ret;
     int val;
 
+    /*
+     * The kernel looks the fd up before it validates anything else, so a bad
+     * fd is EBADF even when the rest of the call is also wrong.  Several arms
+     * below reject optlen or optname without ever reaching the host syscall,
+     * and would report that instead.
+     */
+    if (sockfd < 0) {
+        return -TARGET_EBADF;
+    }
     switch(level) {
     case SOL_TCP:
     case SOL_UDP:
@@ -2623,6 +2632,10 @@ static abi_long do_getsockopt(int sockfd, int level, int optname,
     int len, val;
     socklen_t lv;
 
+    /* EBADF wins over the argument checks below; see do_setsockopt(). */
+    if (sockfd < 0) {
+        return -TARGET_EBADF;
+    }
     switch(level) {
     case TARGET_SOL_SOCKET:
         level = SOL_SOCKET;
@@ -9735,6 +9748,13 @@ _syscall5(int, sys_move_mount, int, __from_dfd, const char *, __from_pathname,
            int, __to_dfd, const char *, __to_pathname, unsigned int, flag)
 #endif
 
+#if defined(TARGET_NR_mount_setattr) && defined(__NR_mount_setattr)
+#define __NR_sys_mount_setattr __NR_mount_setattr
+_syscall5(int, sys_mount_setattr, int, dfd, const char *, path,
+          unsigned int, flags, struct mount_attr_ver0 *, uattr,
+          size_t, usize)
+#endif
+
 #if defined(TARGET_NR_fsopen) && defined(__NR_fsopen)
 #define __NR_sys_fsopen __NR_fsopen
 _syscall2(int, sys_fsopen, const char *, fs_name, unsigned int, flags);
@@ -11222,6 +11242,15 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #ifdef TARGET_NR_mlock
     case TARGET_NR_mlock:
         return get_errno(mlock(g2h(cpu, arg1), arg2));
+#endif
+#ifdef TARGET_NR_mlock2
+    case TARGET_NR_mlock2:
+        if (arg3 & ~TARGET_MLOCK_ONFAULT) {
+            return -TARGET_EINVAL;
+        }
+        return get_errno(mlock2(g2h(cpu, arg1), arg2,
+                                 (arg3 & TARGET_MLOCK_ONFAULT) ?
+                                 MLOCK_ONFAULT : 0));
 #endif
 #ifdef TARGET_NR_munlock
     case TARGET_NR_munlock:
@@ -13035,7 +13064,17 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #ifdef TARGET_NR_mincore
     case TARGET_NR_mincore:
         {
-            void *a = lock_user(VERIFY_NONE, arg1, arg2, 0);
+            void *a;
+
+            /*
+             * The kernel rejects a misaligned start before it looks the range
+             * up, so a start that is both misaligned and unmapped is EINVAL,
+             * not the ENOMEM that a failing lock_user() would report.
+             */
+            if (arg1 & ~TARGET_PAGE_MASK) {
+                return -TARGET_EINVAL;
+            }
+            a = lock_user(VERIFY_NONE, arg1, arg2, 0);
             if (!a) {
                 return -TARGET_ENOMEM;
             }
@@ -14480,6 +14519,43 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         return do_map_shadow_stack(cpu_env, arg1, arg2, arg3);
 #endif
 
+#if defined(TARGET_NR_mount_setattr) && defined(__NR_mount_setattr)
+    case TARGET_NR_mount_setattr:
+        {
+            struct mount_attr_ver0 attr = {};
+            abi_ulong usize = arg5;
+
+            if (usize < sizeof(struct target_mount_attr_ver0)) {
+                return -TARGET_EINVAL;
+            }
+            ret = copy_struct_from_user(&attr, sizeof(attr), arg4, usize);
+            if (ret) {
+                if (ret == -TARGET_E2BIG) {
+                    qemu_log_mask(LOG_UNIMP,
+                                  "Unimplemented mount_setattr mount_attr "
+                                  "size: " TARGET_ABI_FMT_lu "\n", usize);
+                }
+                return ret;
+            }
+            /*
+             * MOUNT_ATTR_* and the MS_* propagation flags have the same
+             * values on all targets, so only byte order needs fixing up.
+             */
+            attr.attr_set = tswap64(attr.attr_set);
+            attr.attr_clr = tswap64(attr.attr_clr);
+            attr.propagation = tswap64(attr.propagation);
+            attr.userns_fd = tswap64(attr.userns_fd);
+
+            p = lock_user_string(arg2);
+            if (!p) {
+                return -TARGET_EFAULT;
+            }
+            ret = get_errno(sys_mount_setattr(arg1, p, arg3, &attr,
+                                              sizeof(attr)));
+            unlock_user(p, arg2, 0);
+        }
+        return ret;
+#endif
 #if defined(TARGET_NR_fsopen) && defined(__NR_fsopen)
     case TARGET_NR_fsopen:
         {

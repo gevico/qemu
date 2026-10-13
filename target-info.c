@@ -32,11 +32,6 @@ const char *target_cpu_type(void)
     return target_info()->cpu_type;
 }
 
-const char *target_machine_typename(void)
-{
-    return target_info()->machine_typename;
-}
-
 EndianMode target_endian_mode(void)
 {
     return target_info()->endianness;
@@ -66,6 +61,16 @@ bool target_arm(void)
 bool target_aarch64(void)
 {
     return target_arch() == SYS_EMU_TARGET_AARCH64;
+}
+
+bool target_m68k(void)
+{
+    return target_arch() == SYS_EMU_TARGET_M68K;
+}
+
+bool target_or1k(void)
+{
+    return target_arch() == SYS_EMU_TARGET_OR1K;
 }
 
 bool target_base_ppc(void)

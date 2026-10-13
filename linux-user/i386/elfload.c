@@ -25,6 +25,13 @@ const char *get_elf_platform(CPUState *cs)
     return elf_platform[family - 3];
 }
 
+void elf_core_copy_fpregs(target_elf_fpregset_t *r, const CPUX86State *env)
+{
+    /* The FSAVE image exactly, stored in target byte order. */
+    QEMU_BUILD_BUG_ON(sizeof(*r) != 4 * 7 + 8 * 10);
+    cpu_x86_fsave_noinit((CPUX86State *)env, r, sizeof(*r));
+}
+
 void elf_core_copy_regs(target_elf_gregset_t *r, const CPUX86State *env)
 {
     r->pt.bx = tswapal(env->regs[R_EBX]);
@@ -38,7 +45,7 @@ void elf_core_copy_regs(target_elf_gregset_t *r, const CPUX86State *env)
     r->pt.es = tswapal(env->segs[R_ES].selector & 0xffff);
     r->pt.fs = tswapal(env->segs[R_FS].selector & 0xffff);
     r->pt.gs = tswapal(env->segs[R_GS].selector & 0xffff);
-    r->pt.orig_ax = tswapal(get_task_state(env_cpu_const(env))->orig_ax);
+    r->pt.orig_ax = tswapal(get_task_state(env_cpu(env))->orig_ax);
     r->pt.ip = tswapal(env->eip);
     r->pt.cs = tswapal(env->segs[R_CS].selector & 0xffff);
     r->pt.flags = tswapal(env->eflags);

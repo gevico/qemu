@@ -502,6 +502,20 @@ static bool trans_l_extbz(DisasContext *dc, arg_da *a)
     return true;
 }
 
+static bool trans_l_extws(DisasContext *dc, arg_da *a)
+{
+    check_r0_write(dc, a->d);
+    tcg_gen_mov_i32(cpu_R(dc, a->d), cpu_R(dc, a->a));
+    return true;
+}
+
+static bool trans_l_extwz(DisasContext *dc, arg_da *a)
+{
+    check_r0_write(dc, a->d);
+    tcg_gen_mov_i32(cpu_R(dc, a->d), cpu_R(dc, a->a));
+    return true;
+}
+
 static bool trans_l_cmov(DisasContext *dc, arg_dab *a)
 {
     check_r0_write(dc, a->d);
@@ -1096,7 +1110,7 @@ static bool trans_l_rfe(DisasContext *dc, arg_l_rfe *a)
     if (is_user(dc)) {
         gen_illegal_exception(dc);
     } else {
-        gen_helper_rfe(tcg_env);
+        gen_helper_or1k_rfe(tcg_env);
         dc->base.is_jmp = DISAS_EXIT;
     }
     return true;

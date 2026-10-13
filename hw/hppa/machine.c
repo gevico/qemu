@@ -48,7 +48,7 @@ struct HppaMachineState {
     uint64_t memsplit_addr;
 };
 
-#define MIN_SEABIOS_HPPA_VERSION 22 /* require at least this fw version */
+#define MIN_SEABIOS_HPPA_VERSION 26 /* require at least this fw version */
 
 #define HPA_POWER_BUTTON        (FIRMWARE_END - 0x10)
 static hwaddr soft_power_reg;
@@ -394,7 +394,7 @@ static TranslateFn *machine_HP_common_init_cpus(MachineState *machine)
  * Last creation step: Add NICs, graphics & load firmware
  */
 static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
-                                        TranslateFn *translate)
+                                    TranslateFn *translate, bool create_diva)
 {
     const char *kernel_filename = machine->kernel_filename;
     MachineClass *mc = MACHINE_GET_CLASS(machine);
@@ -426,7 +426,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
         pci_init_nic_devices(pci_bus, mc->default_nic);
     }
 
-    if (pci_bus && hppa_is_pa20(&cpu[0]->env)) {
+    if (pci_bus && hppa_is_pa20(&cpu[0]->env) && create_diva) {
         /* BMC board: HP Diva GSP PCI card */
         pci_dev = pci_new_multifunction(PCI_DEVFN(2, 0), "diva-gsp");
         if (!lasi_dev) {
@@ -442,8 +442,9 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
     /* create USB OHCI controller for USB keyboard & mouse on Astro machines */
     if (!lasi_dev && machine->enable_graphics && defaults_enabled()) {
         USBBus *usb_bus;
-
-        pci_create_simple(pci_bus, -1, "pci-ohci");
+        if (create_diva) {
+            pci_create_simple(pci_bus, -1, "pci-ohci");
+        }
         usb_bus = USB_BUS(object_resolve_type_unambiguous(TYPE_USB_BUS,
                                                           &error_abort));
         usb_create_simple(usb_bus, "usb-kbd");
@@ -647,7 +648,7 @@ static void machine_HP_715_init(MachineState *machine)
     }
 
     /* Add NICs, graphics & load firmware */
-    machine_HP_common_init_tail(machine, NULL, translate);
+    machine_HP_common_init_tail(machine, NULL, translate, false);
 }
 
 /*
@@ -726,10 +727,10 @@ static void machine_HP_B160L_init(MachineState *machine)
     }
 
     /* Add NICs, graphics & load firmware */
-    machine_HP_common_init_tail(machine, pci_bus, translate);
+    machine_HP_common_init_tail(machine, pci_bus, translate, false);
 }
 
-static AstroState *astro_init(void)
+static AstroState *astro_init(bool is_a400)
 {
     DeviceState *dev;
 
@@ -737,6 +738,10 @@ static AstroState *astro_init(void)
     object_property_set_int(OBJECT(dev), "phys-addr-bits",
                             hppa_phys_addr_bits(&cpu[0]->env),
                             &error_abort);
+    object_property_set_bool(OBJECT(dev), "rotate-pci-pins", is_a400,
+                             &error_abort);
+    object_property_set_bool(OBJECT(dev), "elroy1-on-rope2", is_a400,
+                             &error_abort);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     return ASTRO_CHIP(dev);
@@ -752,6 +757,8 @@ static void machine_HP_C3700_init(MachineState *machine)
     DeviceState *astro_dev;
     MemoryRegion *addr_space = get_system_memory();
     TranslateFn *translate;
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
+    bool is_C3700 = strcmp(mc->name, "C3700") == 0;
 
     /* Create CPUs and RAM.  */
     translate = machine_HP_common_init_cpus(machine);
@@ -763,13 +770,37 @@ static void machine_HP_C3700_init(MachineState *machine)
     }
 
     /* Init Astro and the Elroys (PCI host bus chips).  */
-    astro = astro_init();
+    astro = astro_init(!is_C3700);
     astro_dev = DEVICE(astro);
     memory_region_add_subregion(addr_space, translate(NULL, ASTRO_HPA),
                                 sysbus_mmio_get_region(
                                     SYS_BUS_DEVICE(astro_dev), 0));
     pci_bus = PCI_BUS(qdev_get_child_bus(DEVICE(astro->elroy[0]), "pci"));
     assert(pci_bus);
+
+    /* The C3700 has a SuperIO chip, while the A400 hasn't. */
+    if (is_C3700)  {
+        PCIDevice *ide_pdev = pci_create_simple(pci_bus, PCI_DEVFN(2, 0),
+                                                "pc87560-ide");
+        PCIDevice *usb_pdev = pci_create_simple(pci_bus, PCI_DEVFN(2, 2),
+                                                "pc87560-ohci");
+        PCIDevice *sio_pdev = pci_new(PCI_DEVFN(2, 1), "pc87560-superio");
+        if (serial_hd(0)) {
+            qdev_prop_set_chr(DEVICE(sio_pdev), "serial0", serial_hd(0));
+        }
+        if (serial_hd(1)) {
+            qdev_prop_set_chr(DEVICE(sio_pdev), "serial1", serial_hd(1));
+        }
+        pci_realize_and_unref(sio_pdev, pci_bus, &error_fatal);
+
+        qdev_connect_gpio_out(DEVICE(ide_pdev), 0,
+            qdev_get_gpio_in_named(DEVICE(sio_pdev), "pic-irq", 7));
+        qdev_connect_gpio_out(DEVICE(usb_pdev), 0,
+            qdev_get_gpio_in_named(DEVICE(sio_pdev), "pic-irq", 1));
+
+        qdev_connect_gpio_out_named(DEVICE(sio_pdev), "pic-out", 0,
+                                    pci_allocate_irq(usb_pdev));
+    }
 
     /* SCSI disk setup. */
     if (drive_get_max_bus(IF_SCSI) >= 0) {
@@ -778,7 +809,7 @@ static void machine_HP_C3700_init(MachineState *machine)
     }
 
     /* Add NICs, graphics & load firmware */
-    machine_HP_common_init_tail(machine, pci_bus, translate);
+    machine_HP_common_init_tail(machine, pci_bus, translate, !is_C3700);
 }
 
 /*
@@ -829,7 +860,7 @@ static void hppa_machine_reset(MachineState *ms, ResetType type)
     cpu[0]->env.cmdline_or_bootorder = 'c';
 }
 
-static void hppa_nmi(NMIState *n, int cpu_index, Error **errp)
+static void hppa_nmi(NMIState *ns)
 {
     CPUState *cs;
 
@@ -851,7 +882,7 @@ static void hppa_machine_common_class_init(ObjectClass *oc, const void *data)
     mc->default_ram_id = "hppa.ram";
     mc->default_nic = "tulip";
 
-    nc->nmi_monitor_handler = hppa_nmi;
+    nc->raise_nmi = hppa_nmi;
 }
 
 static void HP_B160L_machine_init_class_init(ObjectClass *oc, const void *data)

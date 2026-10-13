@@ -68,7 +68,7 @@ Project policy and developer guides
 R: Alex Bennée <alex.bennee@linaro.org>
 R: Daniel P. Berrangé <berrange@redhat.com>
 R: Markus Armbruster <armbru@redhat.com>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 W: https://www.qemu.org/docs/master/devel/index.html
 S: Odd Fixes
 F: docs/devel/build-environment.rst
@@ -132,7 +132,7 @@ T: git https://gitlab.com/cohuck/qemu.git s390-next
 L: qemu-s390x@nongnu.org
 
 MIPS general architecture support
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Jiaxun Yang <jiaxun.yang@flygoat.com>
 S: Odd Fixes
 K: ^Subject:.*(?i)mips
@@ -250,6 +250,12 @@ M: Brian Cain <brian.cain@oss.qualcomm.com>
 R: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
 S: Supported
 F: target/hexagon/
+F: hw/intc/hex-l2vic.c
+F: include/hw/intc/hex-l2vic.h
+F: tests/qtest/l2vic-test.c
+F: hw/timer/qct-qtimer.c
+F: include/hw/timer/qct-qtimer.h
+F: tests/qtest/qct-qtimer-test.c
 X: target/hexagon/idef-parser/
 X: target/hexagon/gen_idef_parser_funcs.py
 F: linux-user/hexagon/
@@ -262,6 +268,7 @@ F: gdbstub/gdb-xml/hexagon*.xml
 F: docs/system/target-hexagon.rst
 F: docs/system/hexagon/
 F: docs/devel/hexagon-sys.rst
+F: docs/devel/hexagon-l2vic.rst
 T: git https://github.com/qualcomm/qemu.git hex-next
 
 Hexagon idef-parser
@@ -308,7 +315,7 @@ F: tests/docker/dockerfiles/debian-microblaze-cross.d/build-toolchain.sh
 F: tests/functional/microblaze/
 
 MIPS TCG CPUs
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Aurelien Jarno <aurelien@aurel32.net>
 R: Jiaxun Yang <jiaxun.yang@flygoat.com>
 R: Aleksandar Rikalo <arikalo@gmail.com>
@@ -330,8 +337,8 @@ F: tests/functional/or1k/meson.build
 F: tests/tcg/or1k/
 
 PowerPC TCG CPUs
+M: Chinmay Rath <rathc@linux.ibm.com>
 M: Nicholas Piggin <npiggin@gmail.com>
-R: Chinmay Rath <rathc@linux.ibm.com>
 R: Glenn Miles <milesg@linux.ibm.com>
 R: Harsh Prateek Bora <harshpb@linux.ibm.com>
 L: qemu-ppc@nongnu.org
@@ -465,6 +472,7 @@ F: tests/tcg/tricore/
 
 Multiarch Linux User Tests
 M: Alex Bennée <alex.bennee@linaro.org>
+M: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
 S: Maintained
 F: tests/tcg/multiarch/
 
@@ -490,6 +498,7 @@ F: tests/functional/aarch64/test_kvm.py
 PPC KVM CPUs
 M: Nicholas Piggin <npiggin@gmail.com>
 R: Harsh Prateek Bora <harshpb@linux.ibm.com>
+R: Amit Machhiwal <amachhiw@linux.ibm.com>
 S: Odd Fixes
 F: target/ppc/kvm.c
 
@@ -537,7 +546,7 @@ Guest CPU Cores (other accelerators)
 Overall CPUs other accelerators
 M: Richard Henderson <richard.henderson@linaro.org>
 R: Paolo Bonzini <pbonzini@redhat.com>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: include/exec/cpu*.h
 F: include/exec/target_long.h
@@ -613,6 +622,7 @@ R: Wei Liu <wei.liu@kernel.org>
 R: Doru Blânzeanu <dblanzeanu@linux.microsoft.com>
 S: Supported
 F: target/i386/mshv/
+F: hw/i386/mshv/
 
 X86 Instruction Emulator
 M: Roman Bolshakov <rbolshakov@ddn.com>
@@ -698,7 +708,7 @@ F: qemu.nsi
 F: scripts/nsis.py
 
 Darwin (macOS, iOS)
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Odd Fixes
 F: .gitlab-ci.d/macos*
 F: */*.m
@@ -736,7 +746,10 @@ F: include/hw/*/allwinner*
 F: hw/arm/cubieboard.c
 F: docs/system/arm/cubieboard.rst
 F: hw/misc/axp2xx.c
+F: hw/gpio/allwinner-gpio.c
+F: include/hw/gpio/allwinner-gpio*
 F: tests/functional/arm/test_cubieboard.py
+F: tests/qtest/allwinner-gpio-test.c
 
 Allwinner-h3
 M: Niek Linnenbank <nieklinnenbank@gmail.com>
@@ -986,16 +999,6 @@ S: Odd Fixes
 F: hw/arm/musca.c
 F: docs/system/arm/musca.rst
 
-Musicpal
-M: Jan Kiszka <jan.kiszka@web.de>
-M: Peter Maydell <peter.maydell@linaro.org>
-L: qemu-arm@nongnu.org
-S: Odd Fixes
-F: hw/arm/musicpal.c
-F: hw/net/mv88w8618_eth.c
-F: include/hw/net/mv88w8618_eth.h
-F: docs/system/arm/musicpal.rst
-
 Nuvoton NPCM7xx
 M: Tyrone Ting <kfting@nuvoton.com>
 M: Hao Wu <wuhaotsh@google.com>
@@ -1014,7 +1017,7 @@ F: tests/functional/arm/test_quanta_gsj.py
 
 Raspberry Pi
 M: Peter Maydell <peter.maydell@linaro.org>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 L: qemu-arm@nongnu.org
 S: Odd Fixes
 F: hw/arm/raspi*.c
@@ -1300,6 +1303,15 @@ M: Manos Pitsidianakis <manos.pitsidianakis@linaro.org>
 S: Maintained
 F: rust/hw/char/pl011/
 
+Axiado SoCs and EVKs
+M: Kuan-Jui Chiu <kchiu@axiado.com>
+L: qemu-arm@nongnu.org
+S: Maintained
+F: hw/arm/ax3000*.c
+F: hw/*/axiado*.c
+F: include/hw/arm/ax3000*.h
+F: include/hw/*/axiado*.h
+
 AVR Machines
 -------------
 
@@ -1316,7 +1328,7 @@ F: include/hw/misc/avr_power.h
 F: hw/misc/avr_power.c
 
 Arduino
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: hw/avr/arduino.c
 F: tests/functional/avr/test_uno.py
@@ -1346,6 +1358,10 @@ F: include/hw/pci-host/dino.h
 F: pc-bios/hppa-firmware.img
 F: roms/seabios-hppa/
 F: tests/functional/hppa/
+F: hw/isa/pc87560.c
+F: hw/ide/pc87560-ide.c
+F: hw/usb/pc87560-ohci.c
+F: include/hw/isa/pc87560.h
 
 Hexagon Machines
 ----------------
@@ -1400,8 +1416,7 @@ F: include/hw/m68k/mcf*.h
 F: tests/functional/m68k/test_mcf5208evb.py
 
 NeXTcube
-M: Thomas Huth <th.huth+qemu@posteo.eu>
-S: Odd Fixes
+S: Orphan
 F: hw/m68k/next-*.c
 F: hw/display/next-fb.c
 F: include/hw/m68k/next-cube.h
@@ -1465,7 +1480,7 @@ F: hw/microblaze/petalogix_ml605_mmu.c
 MIPS Machines
 -------------
 Overall MIPS Machines
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Odd Fixes
 F: configs/devices/mips*/*
 F: hw/mips/
@@ -1482,7 +1497,7 @@ F: hw/dma/rc4030.c
 F: hw/nvram/ds1225y.c
 
 Malta
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Aurelien Jarno <aurelien@aurel32.net>
 S: Odd Fixes
 F: hw/isa/piix.c
@@ -1496,7 +1511,7 @@ F: tests/functional/mips*/test_tuxrun.py
 
 Fuloong 2E
 M: Huacai Chen <chenhuacai@kernel.org>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Jiaxun Yang <jiaxun.yang@flygoat.com>
 S: Odd Fixes
 F: hw/mips/fuloong2e.c
@@ -1520,7 +1535,7 @@ F: include/hw/intc/loongson_liointc.h
 F: tests/functional/mips64el/test_loongson3v.py
 
 Boston
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Aleksandar Rikalo <arikalo@gmail.com>
 S: Odd Fixes
 F: hw/core/loader-fit.c
@@ -1645,6 +1660,7 @@ F: tests/functional/ppc/test_40p.py
 sPAPR (pseries)
 M: Nicholas Piggin <npiggin@gmail.com>
 M: Harsh Prateek Bora <harshpb@linux.ibm.com>
+R: Amit Machhiwal <amachhiw@linux.ibm.com>
 L: qemu-ppc@nongnu.org
 S: Odd Fixes
 F: hw/*/spapr*
@@ -1746,6 +1762,22 @@ F: include/hw/ppc/vof*
 F: pc-bios/vof/*
 F: pc-bios/vof*
 
+PowerPC RAS (Reliability, Availability and Serviceability)
+M: Aditya Gupta <adityag@linux.ibm.com>
+R: Sourabh Jain <sourabhjain@linux.ibm.com>
+R: Hari Bathini <hbathini@linux.ibm.com>
+R: Shivang Upadhyay <shivangu@linux.ibm.com>
+L: qemu-ppc@nongnu.org
+S: Maintained
+F: hw/ppc/spapr_events.c
+F: hw/ppc/spapr_fadump.c
+F: hw/ppc/spapr_pci_vfio.c
+F: hw/ppc/spapr_rtas.c
+F: hw/ppc/pnv_mpipl.c
+F: include/hw/ppc/spapr_fadump.h
+F: include/hw/ppc/pnv_mpipl.h
+F: tests/functional/ppc64/test_fadump.py
+
 RISC-V Machines
 ---------------
 OpenTitan
@@ -1827,12 +1859,21 @@ M: Chao Liu <chao.liu@processmission.com>
 L: qemu-riscv@nongnu.org
 S: Maintained
 F: docs/system/riscv/k230.rst
+F: hw/misc/k230_ddr.c
 F: hw/riscv/k230.c
 F: hw/watchdog/k230_wdt.c
+F: hw/dma/k230_gsdma.c
+F: hw/misc/k230_decomp_gzip.c
+F: include/hw/misc/k230_ddr.h
 F: include/hw/riscv/k230.h
 F: include/hw/watchdog/k230_wdt.h
+F: include/hw/dma/k230_gsdma.h
+F: include/hw/misc/k230_decomp_gzip.h
 F: tests/functional/riscv64/test_k230.py
+F: tests/qtest/k230-ddr-test.c
 F: tests/qtest/k230-wdt-test.c
+F: tests/qtest/k230-gsdma-test.c
+F: tests/qtest/k230-decomp-gzip-test.c
 
 RX Machines
 -----------
@@ -1926,10 +1967,15 @@ R: Christian Borntraeger <borntraeger@linux.ibm.com>
 R: Jason Herne <jjherne@linux.ibm.com>
 S: Supported
 F: hw/s390x/ipl.*
+F: hw/s390x/cert-store.[ch]
+F: include/hw/s390x/ipl/
 F: pc-bios/s390-ccw/
 F: pc-bios/s390-ccw.img
 F: docs/devel/s390-dasd-ipl.rst
+F: docs/specs/s390x-secure-ipl.rst
+F: docs/system/s390x/secure-ipl.rst
 F: tests/functional/s390x/test_pxelinux.py
+F: tests/functional/s390x/test_secure_ipl.py
 L: qemu-s390x@nongnu.org
 
 S390 PCI
@@ -2074,9 +2120,10 @@ F: include/hw/i386/nitro_enclave.h
 F: docs/system/i386/nitro-enclave.rst
 
 Machine core
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Zhao Liu <zhao1.liu@intel.com>
 S: Maintained
+F: hw/core/cpu-internal.h
 F: hw/core/cpu-common.c
 F: hw/core/cpu-system.c
 F: hw/core/machine-qmp-cmds.c
@@ -2097,11 +2144,12 @@ F: tests/unit/test-smp-parse.c
 
 TargetInfo API
 M: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Supported
 F: include/qemu/target-info*.h
 F: target-info*.c
 F: configs/targets/*.c
+F: tests/unit/test-multi-targets.c
 
 Xtensa Machines
 ---------------
@@ -2137,7 +2185,7 @@ F: tests/qtest/fuzz-sb16-test.c
 
 Xilinx CAN
 M: Francisco Iglesias <francisco.iglesias@amd.com>
-M: Vikram Garhwal <vikram.garhwal@bytedance.com>
+M: Vikram Garhwal <vgarhw@gmail.com>
 S: Maintained
 F: hw/net/can/xlnx-*
 F: include/hw/net/xlnx-*
@@ -2160,6 +2208,7 @@ F: docs/specs/edu.rst
 
 IDE
 M: John Snow <jsnow@redhat.com>
+M: Denis V. Lunev <den@openvz.org>
 L: qemu-block@nongnu.org
 S: Odd Fixes
 F: include/hw/ide/
@@ -2332,10 +2381,11 @@ F: docs/system/virtio-net-failover.rst
 T: git https://github.com/jasowang/qemu.git net
 
 Parallel NOR Flash devices
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: hw/block/pflash_cfi*.c
 F: include/hw/block/flash.h
+F: tests/qtest/pflash-cfi02-test.c
 
 SCSI
 M: Paolo Bonzini <pbonzini@redhat.com>
@@ -2366,7 +2416,7 @@ S: Maintained
 F: hw/ssi/xilinx_*
 
 SD (Secure Card)
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 M: Bin Meng <bmeng.cn@gmail.com>
 L: qemu-block@nongnu.org
 S: Odd Fixes
@@ -2376,6 +2426,7 @@ F: hw/sd/sd*
 F: hw/sd/ssi-sd.c
 F: tests/qtest/fuzz-sdcard-test.c
 F: tests/qtest/sdhci-test.c
+F: tests/qtest/xilinx-zynq-sdhci-test.c
 
 USB
 S: Orphan
@@ -2646,6 +2697,12 @@ S: Supported
 F: include/hw/virtio/vhost-user-rtc.h
 F: hw/virtio/vhost-user-rtc*
 
+vhost-user-media
+M: Albert Esteve <aesteve@redhat.com>
+S: Supported
+F: hw/display/vhost-user-media*
+F: include/hw/virtio/vhost-user-media.h
+
 virtio-crypto
 M: Gonglei <arei.gonglei@huawei.com>
 S: Supported
@@ -2833,15 +2890,28 @@ F: include/hw/acpi/vmgenid.h
 F: docs/specs/vmgenid.rst
 F: tests/qtest/vmgenid-test.c
 
+VM Launch Update
+M: Ani Sinha <anisinha@redhat.com>
+M: Gerd Hoffman <kraxel@redhat.com>
+S: Maintained
+F: hw/misc/vmlaunchupdate.c
+F: include/hw/misc/vmlaunchupdate.h
+F: include/standard-headers/misc/vmlaunchupdate.h
+F: docs/specs/vmlaunchupdate.rst
+F: tests/functional/aarch64/test_vm_launch_update_aarch.py
+F: tests/functional/x86_64/test_vm_launch_update.py
+F: tests/qtest/launchupdate-test.c
+F: tests/data/igvm/*
+
 LED
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: include/hw/misc/led.h
 F: hw/misc/led.c
 
 Unimplemented device
 M: Peter Maydell <peter.maydell@linaro.org>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Ani Sinha <ani@anisinha.ca>
 S: Maintained
 F: include/hw/misc/unimp.h
@@ -2849,7 +2919,7 @@ F: hw/misc/unimp.c
 
 Empty slot
 M: Artyom Tarasenko <atar4qemu@gmail.com>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Ani Sinha <ani@anisinha.ca>
 S: Maintained
 F: include/hw/misc/empty_slot.h
@@ -2928,14 +2998,14 @@ F: hw/display/apple-gfx*
 
 PIIX4 South Bridge (i82371AB)
 M: Hervé Poussineau <hpoussin@reactos.org>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: hw/isa/piix.c
 F: include/hw/southbridge/piix.h
 
 VIA South Bridges (VT82C686B, VT8231)
 M: BALATON Zoltan <balaton@eik.bme.hu>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Jiaxun Yang <jiaxun.yang@flygoat.com>
 S: Maintained
 F: hw/isa/vt82c686.c
@@ -2985,7 +3055,7 @@ F: include/hw/rx/
 CAN bus subsystem and hardware
 M: Pavel Pisa <pisa@cmp.felk.cvut.cz>
 M: Francisco Iglesias <francisco.iglesias@amd.com>
-M: Vikram Garhwal <vikram.garhwal@bytedance.com>
+M: Vikram Garhwal <vgarhw@gmail.com>
 S: Maintained
 W: https://canbus.pages.fel.cvut.cz/
 F: net/can/*
@@ -3000,13 +3070,13 @@ F: hw/intc/openpic.c
 F: include/hw/ppc/openpic.h
 
 MIPS CPS
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Odd Fixes
 F: hw/misc/mips_*
 F: include/hw/misc/mips_*
 
 MIPS GIC
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Odd Fixes
 F: hw/intc/mips_gic.c
 F: hw/timer/mips_gictimer.c
@@ -3132,7 +3202,7 @@ F: audio/alsaaudio.c
 
 Core Audio framework backend
 M: Gerd Hoffmann <kraxel@redhat.com>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Christian Schoenebeck <qemu_oss@crudebyte.com>
 R: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>
 S: Odd Fixes
@@ -3271,6 +3341,8 @@ F: docs/devel/migration/CPR.rst
 
 Compute Express Link
 M: Jonathan Cameron <jic23@kernel.org>
+R: Junjie Cao <junjie.cao@intel.com>
+R: Anisa Su <anisa.su@samsung.com>
 L: linux-cxl@vger.kernel.org
 S: Supported
 F: hw/cxl/
@@ -3368,26 +3440,9 @@ F: scripts/coccinelle/remove_local_err.cocci
 F: scripts/coccinelle/use-error_fatal.cocci
 F: scripts/coccinelle/errp-guard.cocci
 
-Firmware Assisted Dump (fadump) for sPAPR (pseries)
-M: Aditya Gupta <adityag@linux.ibm.com>
-R: Sourabh Jain <sourabhjain@linux.ibm.com>
-S: Maintained
-F: include/hw/ppc/spapr_fadump.h
-F: hw/ppc/spapr_fadump.c
-F: tests/functional/ppc64/test_fadump.py
-
-Memory-Preserving Initial Program Load (MPIPL) for PowerNV
-M: Aditya Gupta <adityag@linux.ibm.com>
-R: Hari Bathini <hbathini@linux.ibm.com>
-R: Sourabh <sourabhjain@linux.ibm.com>
-S: Maintained
-F: include/hw/ppc/pnv_mpipl.h
-F: hw/ppc/pnv_mpipl.c
-F: tests/functional/ppc64/test_fadump.py
-
 GDB stub
 M: Alex Bennée <alex.bennee@linaro.org>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Maintained
 F: docs/system/gdb.rst
 F: gdbstub/*
@@ -3401,7 +3456,7 @@ T: git https://gitlab.com/stsquad/qemu gdbstub/next
 Memory API
 M: Paolo Bonzini <pbonzini@redhat.com>
 M: Peter Xu <peterx@redhat.com>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Supported
 F: include/system/ioport.h
 F: include/exec/memop.h
@@ -3418,6 +3473,7 @@ F: system/ioport.c
 F: system/memory.c
 F: system/memory_mapping.c
 F: system/physmem.c
+F: system/physmem-qmp-cmds.c
 F: system/memory_ldst*
 F: system/memory-internal.h
 F: system/ram-block-attributes.c
@@ -3463,7 +3519,7 @@ F: tests/functional/generic/test_vnc.py
 
 Cocoa graphics
 M: Peter Maydell <peter.maydell@linaro.org>
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Akihiko Odaki <odaki@rsg.ci.i.u-tokyo.ac.jp>
 S: Odd Fixes
 F: ui/cocoa.m
@@ -3744,7 +3800,7 @@ F: rust/rustfmt.toml
 F: rust/system/
 F: rust/tests/
 F: rust/util/
-F: scripts/get-wraps-from-cargo-registry.py
+F: scripts/update-cargo-wraps.py
 
 Rust-related patches CC here
 L: qemu-rust@nongnu.org
@@ -3857,6 +3913,7 @@ Migration dirty limit and dirty page rate
 M: Hyman Huang <infra.ai.cloud@bitdeer.com>
 S: Maintained
 F: system/dirtylimit.c
+F: system/dirtylimit-hmp-cmds.c
 F: include/system/dirtylimit.h
 F: migration/dirtyrate.c
 F: migration/dirtyrate.h
@@ -4026,7 +4083,7 @@ S: Maintained
 F: contrib/elf2dmp/
 
 Overall sensors
-M: Philippe Mathieu-Daudé <philmd@mailo.com>
+M: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 S: Odd Fixes
 F: hw/sensor
 F: include/hw/sensor
@@ -4098,7 +4155,7 @@ F: tests/uefi-test-tools/
 IGVM Firmware
 M: Gerd Hoffmann <kraxel@redhat.com>
 M: Stefano Garzarella <sgarzare@redhat.com>
-R: Ani Sinha <anisinha@redhat.com>
+M: Ani Sinha <anisinha@redhat.com>
 S: Maintained
 F: backends/igvm*.c
 F: docs/system/igvm.rst
@@ -4579,7 +4636,7 @@ F: tests/vm/freebsd
 
 Functional testing framework
 M: Thomas Huth <th.huth+qemu@posteo.eu>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
+R: Philippe Mathieu-Daudé <philmd@oss.qualcomm.com>
 R: Daniel P. Berrange <berrange@redhat.com>
 S: Odd Fixes
 F: docs/devel/testing/functional.rst
@@ -4597,8 +4654,9 @@ F: .gitlab-ci.d/windows.yml
 
 Guest Test Compilation Support
 M: Alex Bennée <alex.bennee@linaro.org>
+M: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
 S: Maintained
-F: tests/tcg/Makefile.target
+F: tests/tcg/meson.build
 
 GitLab custom runners (HW sponsored by Linaro, OSUOSL and IBM)
 M: Alex Bennée <alex.bennee@linaro.org>
@@ -4635,7 +4693,6 @@ Meson
 M: Paolo Bonzini <pbonzini@redhat.com>
 R: Marc-André Lureau <marcandre.lureau@redhat.com>
 R: Daniel P. Berrange <berrange@redhat.com>
-R: Philippe Mathieu-Daudé <philmd@mailo.com>
 R: Pierrick Bouvier <pierrick.bouvier@oss.qualcomm.com>
 S: Maintained
 F: meson.build

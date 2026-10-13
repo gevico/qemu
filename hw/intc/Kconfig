@@ -8,6 +8,9 @@ config I8259
 config PL190
     bool
 
+config HEX_L2VIC
+    bool
+
 config IOAPIC
     bool
     select I8259
@@ -23,7 +26,7 @@ config APIC
 
 config ARM_GIC
     bool
-    select ARM_GICV3 if TCG
+    select ARM_GICV3 if TCG || HVF || WHPX
     select ARM_GIC_KVM if KVM
     select MSI_NONBROKEN
 

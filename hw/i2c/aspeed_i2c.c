@@ -159,6 +159,8 @@ static uint64_t aspeed_i2c_bus_new_read(AspeedI2CBus *bus, hwaddr offset,
     case A_I2CS_INTR_CTRL:
     case A_I2CS_DMA_LEN_STS:
     case A_I2CS_INTR_STS:
+    case A_I2CC_BYTE_DATA_LOG:
+    case A_I2CC_VERSION_CTRL:
         value = bus->regs[offset / sizeof(*bus->regs)];
         break;
     case A_I2CC_DMA_ADDR:
@@ -295,6 +297,89 @@ static int aspeed_i2c_dma_read(AspeedI2CBus *bus, uint8_t *data)
     return 0;
 }
 
+/*
+ * In AST2700 buffer mode the master DMA command bits (TX/RX_DMA_EN) and the
+ * DMA length registers are reused, but data is moved through the controller
+ * internal SRAM pool at the offset programmed in I2CM_DMA_TX/RX_ADDR instead
+ * of DRAM. FUNC_CFG_DMA_EN selects between the two (set = DRAM).
+ */
+static bool aspeed_i2c_bus_dma_to_pool(AspeedI2CBus *bus)
+{
+    return aspeed_i2c_is_new_mode(bus->controller) &&
+           !ARRAY_FIELD_EX32(bus->regs, I2CC_VERSION_CTRL, FUNC_CFG_DMA_EN);
+}
+
+static int aspeed_i2c_bus_send_dma_pool(AspeedI2CBus *bus)
+{
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+    uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+    uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+    uint32_t offset = bus->regs[R_I2CM_DMA_TX_ADDR];
+    uint8_t *pool_base = aic->bus_pool_base(bus);
+    int ret = -1;
+    int i;
+
+    ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, 0);
+    for (i = 0; bus->regs[reg_dma_len] &&
+                offset + i < ASPEED_I2C_BUS_POOL_SIZE; i++) {
+        trace_aspeed_i2c_bus_send("BUFF", i + 1, bus->regs[reg_dma_len],
+                                  pool_base[offset + i]);
+        ret = i2c_send(bus->bus, pool_base[offset + i]);
+        bus->regs[reg_dma_len]--;
+        ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, i + 1);
+        if (ret) {
+            break;
+        }
+    }
+    SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, TX_DMA_EN, 0);
+    return ret;
+}
+
+/*
+ * Latch a received byte where firmware reads it back from: the receive byte
+ * buffer, only valid while the DMA buffer is disabled, and the byte data log,
+ * which AST2700 uses instead. Buffer and DMA transfers latch only the first
+ * byte, read back as the SMBus block length.
+ */
+static void aspeed_i2c_bus_latch_rx_byte(AspeedI2CBus *bus, uint8_t data)
+{
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+    uint32_t reg_byte_buf = aspeed_i2c_bus_byte_buf_offset(bus);
+    uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+
+    if (aic->has_byte_data_log) {
+        ARRAY_FIELD_DP32(bus->regs, I2CC_BYTE_DATA_LOG, RX_BUF, data);
+    }
+
+    if (!SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_DMA_EN)) {
+        SHARED_ARRAY_FIELD_DP32(bus->regs, reg_byte_buf, RX_BUF, data);
+    }
+}
+
+static void aspeed_i2c_bus_recv_dma_pool(AspeedI2CBus *bus)
+{
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+    uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+    uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+    uint32_t offset = bus->regs[R_I2CM_DMA_RX_ADDR];
+    uint8_t *pool_base = aic->bus_pool_base(bus);
+    int i;
+
+    ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, 0);
+    for (i = 0; bus->regs[reg_dma_len] &&
+                offset + i < ASPEED_I2C_BUS_POOL_SIZE; i++) {
+        pool_base[offset + i] = i2c_recv(bus->bus);
+        trace_aspeed_i2c_bus_recv("BUFF", i + 1, bus->regs[reg_dma_len],
+                                  pool_base[offset + i]);
+        if (i == 0) {
+            aspeed_i2c_bus_latch_rx_byte(bus, pool_base[offset]);
+        }
+        bus->regs[reg_dma_len]--;
+        ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, i + 1);
+    }
+    SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, RX_DMA_EN, 0);
+}
+
 static int aspeed_i2c_bus_send(AspeedI2CBus *bus)
 {
     AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
@@ -320,6 +405,10 @@ static int aspeed_i2c_bus_send(AspeedI2CBus *bus)
         }
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, TX_BUFF_EN, 0);
     } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_DMA_EN)) {
+        /* In buffer mode the DMA moves data through the pool, not DRAM */
+        if (aspeed_i2c_bus_dma_to_pool(bus)) {
+            return aspeed_i2c_bus_send_dma_pool(bus);
+        }
         /* In new mode, clear how many bytes we TXed */
         if (aspeed_i2c_is_new_mode(bus->controller)) {
             ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, 0);
@@ -379,19 +468,27 @@ static void aspeed_i2c_bus_recv(AspeedI2CBus *bus)
             pool_base[i] = i2c_recv(bus->bus);
             trace_aspeed_i2c_bus_recv("BUF", i + 1, pool_rx_count,
                                       pool_base[i]);
+            if (i == 0) {
+                aspeed_i2c_bus_latch_rx_byte(bus, pool_base[0]);
+            }
         }
 
         /* Update RX count */
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_pool_ctrl, RX_COUNT, i & 0xff);
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, RX_BUFF_EN, 0);
     } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_DMA_EN)) {
+        /* In buffer mode the DMA moves data through the pool, not DRAM */
+        if (aspeed_i2c_bus_dma_to_pool(bus)) {
+            aspeed_i2c_bus_recv_dma_pool(bus);
+            return;
+        }
         /* In new mode, clear how many bytes we RXed */
         if (aspeed_i2c_is_new_mode(bus->controller)) {
             ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, 0);
         }
 
         aspeed_i2c_set_rx_dma_dram_offset(bus);
-        while (bus->regs[reg_dma_len]) {
+        for (i = 0; bus->regs[reg_dma_len]; i++) {
             MemTxResult result;
 
             data = i2c_recv(bus->bus);
@@ -407,6 +504,10 @@ static void aspeed_i2c_bus_recv(AspeedI2CBus *bus)
                 return;
             }
 
+            if (i == 0) {
+                aspeed_i2c_bus_latch_rx_byte(bus, data);
+            }
+
             bus->dma_dram_offset++;
             bus->regs[reg_dma_len]--;
             /* In new mode, keep track of how many bytes we RXed */
@@ -420,7 +521,7 @@ static void aspeed_i2c_bus_recv(AspeedI2CBus *bus)
     } else {
         data = i2c_recv(bus->bus);
         trace_aspeed_i2c_bus_recv("BYTE", 1, 1, bus->regs[reg_byte_buf]);
-        SHARED_ARRAY_FIELD_DP32(bus->regs, reg_byte_buf, RX_BUF, data);
+        aspeed_i2c_bus_latch_rx_byte(bus, data);
     }
 }
 
@@ -853,6 +954,9 @@ static void aspeed_i2c_bus_new_write(AspeedI2CBus *bus, hwaddr offset,
         bus->regs[R_I2CS_DMA_RX_ADDR_HI] = FIELD_EX32(value,
                                                       I2CS_DMA_RX_ADDR_HI,
                                                       ADDR_HI);
+        break;
+    case A_I2CC_VERSION_CTRL:
+        bus->regs[R_I2CC_VERSION_CTRL] = value;
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIx "\n",
@@ -1497,6 +1601,13 @@ static void aspeed_i2c_bus_reset_hold(Object *obj, ResetType type)
     memset(s->regs, 0, sizeof(s->regs));
     s->pending_intr_sts = 0;
     i2c_end_transfer(s->bus);
+    /*
+     * I2CC_VERSION_CTRL resets to all-ones. FUNC_CFG_DMA_EN is therefore set,
+     * so master DMA targets DRAM unless the guest clears it to select buffer
+     * mode. Guests unaware of buffer mode never touch this register and keep
+     * doing DRAM DMA.
+     */
+    s->regs[R_I2CC_VERSION_CTRL] = 0xffffffff;
 }
 
 static void aspeed_i2c_bus_realize(DeviceState *dev, Error **errp)
@@ -1679,6 +1790,7 @@ static void aspeed_1040_i2c_class_init(ObjectClass *klass, const void *data)
     aic->has_dma = true;
     aic->mem_size = 0x2000;
     aic->has_dma64 = true;
+    aic->has_byte_data_log = true;
     aic->dma_addr_lo_mask = 0x00ffffff;
 }
 
@@ -1701,6 +1813,7 @@ static void aspeed_2700_i2c_class_init(ObjectClass *klass, const void *data)
     aic->has_dma = true;
     aic->mem_size = 0x2000;
     aic->has_dma64 = true;
+    aic->has_byte_data_log = true;
     aic->dma_addr_lo_mask = 0xffffffff;
 }
 

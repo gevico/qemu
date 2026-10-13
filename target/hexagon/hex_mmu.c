@@ -71,10 +71,16 @@ bool hex_tlb_find_match(CPUHexagonState *env, uint32_t VA,
     uint32_t ssr = env->t_sreg[HEX_SREG_SSR];
     uint8_t asid = GET_SSR_FIELD(SSR_ASID, ssr);
     int cause_code = 0;
+    bool found;
 
-    bool found = hexagon_tlb_find_match(cpu->tlb, asid, VA, access_type,
-                                        PA, prot, size, excp, &cause_code,
-                                        mmu_idx);
+    env->imprecise_exception = 0;
+    found = hexagon_tlb_find_match(cpu->tlb, asid, VA, access_type,
+                                   PA, prot, size, excp, &cause_code,
+                                   mmu_idx);
+    if (*excp == HEX_EVENT_IMPRECISE) {
+        env->imprecise_exception = *excp;
+        *excp = 0;
+    }
     if (cause_code) {
         env->cause_code = cause_code;
     }
@@ -86,9 +92,12 @@ uint32_t hex_tlb_lookup(CPUHexagonState *env, uint32_t ssr, uint32_t VA)
 {
     HexagonCPU *cpu = env_archcpu(env);
     uint8_t asid = GET_SSR_FIELD(SSR_ASID, ssr);
+    uint32_t imprecise_exception = 0;
     int cause_code = 0;
 
-    uint32_t result = hexagon_tlb_lookup(cpu->tlb, asid, VA, &cause_code);
+    uint32_t result = hexagon_tlb_lookup(cpu->tlb, asid, VA,
+                                         &imprecise_exception, &cause_code);
+    env->imprecise_exception = imprecise_exception;
     if (cause_code) {
         env->cause_code = cause_code;
     }
@@ -107,11 +116,13 @@ int hex_tlb_check_overlap(CPUHexagonState *env, uint64_t entry, uint64_t index)
     return hexagon_tlb_check_overlap(cpu->tlb, entry, index);
 }
 
-void dump_mmu(Monitor *mon, CPUHexagonState *env)
+#ifdef CONFIG_HMP
+void dump_mmu(MonitorHMP *hmp, CPUHexagonState *env)
 {
     HexagonCPU *cpu = env_archcpu(env);
-    hexagon_tlb_dump(mon, cpu->tlb);
+    hexagon_tlb_dump(hmp, cpu->tlb);
 }
+#endif
 
 static inline void print_thread(const char *str, CPUState *cs)
 {

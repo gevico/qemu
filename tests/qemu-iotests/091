@@ -21,8 +21,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=codyprime@gmail.com
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -48,6 +46,7 @@ _supported_fmt qcow2
 _supported_proto file fuse
 _supported_os Linux
 _supported_cache_modes writethrough none writeback
+_require_hmp
 _default_cache_mode none writeback
 
 size=1G

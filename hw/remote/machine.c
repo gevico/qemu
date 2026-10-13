@@ -24,7 +24,6 @@
 #include "hw/core/qdev.h"
 #include "hw/remote/vfio-user-obj.h"
 #include "hw/pci/msi.h"
-#include "hw/arm/machines-qom.h"
 
 static void remote_machine_init(MachineState *machine)
 {
@@ -112,7 +111,7 @@ static void remote_machine_instance_init(Object *obj)
     s->auto_shutdown = true;
 }
 
-static void remote_machine_dev_unplug_cb(HotplugHandler *hotplug_dev,
+static void remote_machine_dev_unplug_cb(const HotplugHandler *hotplug_dev,
                                          DeviceState *dev, Error **errp)
 {
     qdev_unrealize(dev);
@@ -149,8 +148,6 @@ static const TypeInfo remote_machine = {
     .class_init = remote_machine_class_init,
     .interfaces = (const InterfaceInfo[]) {
         { TYPE_HOTPLUG_HANDLER },
-        { TYPE_TARGET_AARCH64_MACHINE },
-        { TYPE_TARGET_ARM_MACHINE },
         { }
     }
 };

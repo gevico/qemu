@@ -399,6 +399,18 @@ QDict *qtest_qmp_eventwait_ref(QTestState *s, const char *event);
 QDict *qtest_qmp_event_ref(QTestState *s, const char *event);
 
 /**
+ * qtest_qmp_job_wait:
+ * @s: #QTestState instance to operate on.
+ * @job_id: job identifier to wait for.
+ *
+ * Wait for a QMP job to reach "concluded" status by consuming
+ * JOB_STATUS_CHANGE events, then dismiss the job.
+ * Asserts that the job completed without error.
+ */
+void qtest_qmp_job_wait(QTestState *s, const char *job_id);
+
+#ifdef CONFIG_HMP
+/**
  * qtest_hmp:
  * @s: #QTestState instance to operate on.
  * @fmt: HMP command to send to QEMU, formats arguments like sprintf().
@@ -423,6 +435,18 @@ char *qtest_hmp(QTestState *s, const char *fmt, ...) G_GNUC_PRINTF(2, 3);
  */
 char *qtest_vhmp(QTestState *s, const char *fmt, va_list ap)
     G_GNUC_PRINTF(2, 0);
+#endif
+
+/**
+ * qtest_qemu_io:
+ * @s: #QTestState instance to operate on.
+ * @device: block device node-name or BlockBackend name.
+ * @fmt: qemu-io command to send, formats arguments like sprintf().
+ *
+ * Send a qemu-io command via the qtest protocol.
+ */
+void qtest_qemu_io(QTestState *s, const char *device,
+                   const char *fmt, ...) G_GNUC_PRINTF(3, 4);
 
 void qtest_module_load(QTestState *s, const char *prefix, const char *libname);
 

@@ -12,6 +12,7 @@
 #include "hw/core/boards.h"
 #include "qom/object.h"
 #include "hw/arm/aspeed_soc.h"
+#include "hw/arm/boot.h"
 
 typedef struct AspeedMachineState AspeedMachineState;
 
@@ -25,13 +26,6 @@ DECLARE_OBJ_CHECKERS(AspeedMachineState, AspeedMachineClass,
 #define ASPEED_MAC2_ON   (1 << 2)
 #define ASPEED_MAC3_ON   (1 << 3)
 
-/* On 32-bit hosts, lower RAM to 1G because of the 2047 MB limit */
-#if HOST_LONG_BITS == 32
-#define ASPEED_RAM_SIZE(sz) MIN((sz), 1 * GiB)
-#else
-#define ASPEED_RAM_SIZE(sz) (sz)
-#endif
-
 struct AspeedMachineState {
     MachineState parent_obj;
 
@@ -42,6 +36,7 @@ struct AspeedMachineState {
     char *fmc_model;
     char *spi_model;
     uint32_t hw_strap1;
+    struct arm_boot_info bootinfo;
 };
 
 struct AspeedMachineClass {

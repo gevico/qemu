@@ -984,6 +984,44 @@ void qtest_qmp_eventwait(QTestState *s, const char *event)
     qobject_unref(response);
 }
 
+void qtest_qmp_job_wait(QTestState *s, const char *job_id)
+{
+    QDict *response, *data, *error;
+    QList *jobs;
+    const QListEntry *entry;
+
+    for (;;) {
+        response = qtest_qmp_eventwait_ref(s, "JOB_STATUS_CHANGE");
+        data = qdict_get_qdict(response, "data");
+        if (!strcmp(qdict_get_str(data, "id"), job_id) &&
+            !strcmp(qdict_get_str(data, "status"), "concluded")) {
+            qobject_unref(response);
+            break;
+        }
+        qobject_unref(response);
+    }
+
+    response = qtest_qmp(s, "{ 'execute': 'query-jobs' }");
+    g_assert(qdict_haskey(response, "return"));
+    jobs = qobject_to(QList, qdict_get(response, "return"));
+    g_assert(jobs);
+    QLIST_FOREACH_ENTRY(jobs, entry) {
+        QDict *job = qobject_to(QDict, qlist_entry_obj(entry));
+        if (!strcmp(qdict_get_str(job, "id"), job_id)) {
+            g_assert_null(qdict_get_try_str(job, "error"));
+            break;
+        }
+    }
+    qobject_unref(response);
+
+    response = qtest_qmp(s,
+        "{ 'execute': 'job-dismiss', 'arguments': { 'id': %s } }", job_id);
+    error = qdict_get_qdict(response, "error");
+    g_assert_null(error);
+    qobject_unref(response);
+}
+
+#ifdef CONFIG_HMP
 char *qtest_vhmp(QTestState *s, const char *fmt, va_list ap)
 {
     char *cmd;
@@ -1010,6 +1048,21 @@ char *qtest_hmp(QTestState *s, const char *fmt, ...)
     ret = qtest_vhmp(s, fmt, ap);
     va_end(ap);
     return ret;
+}
+#endif
+
+void qtest_qemu_io(QTestState *s, const char *device,
+                   const char *fmt, ...)
+{
+    va_list ap;
+    g_autofree char *cmd = NULL;
+
+    va_start(ap, fmt);
+    cmd = g_strdup_vprintf(fmt, ap);
+    va_end(ap);
+
+    qtest_sendf(s, "qemu-io %s %s\n", device, cmd);
+    qtest_rsp(s);
 }
 
 const char *qtest_get_arch(void)
@@ -2151,8 +2204,7 @@ bool mkimg(const char *file, const char *fmt, unsigned size_mb)
 
 bool qtest_verbose(const char *domain)
 {
-    const char *log = getenv("QTEST_LOG");
-    const char *found;
+    const gchar *found, *log = g_getenv("QTEST_LOG");
 
     assert(domain);
 
@@ -2178,11 +2230,11 @@ bool qtest_verbose(const char *domain)
          *  QTEST_LOG=<domain1>,-<domain2> (only false for domain2)
          *  allows other separators, except - and +
          */
-        found = strstr(log, domain);
+        found = g_strstr_len(log, -1, domain);
 
         if (found) {
             /* reject options given twice */
-            assert(!strstr(found + strlen(domain), domain));
+            assert(!g_strstr_len(found + strlen(domain), -1, domain));
 
             if (found > log) {
                 ptrdiff_t i = found - log - 1;
@@ -2196,7 +2248,7 @@ bool qtest_verbose(const char *domain)
              * If filtering out a specific domain, all others are
              * enabled.
              */
-            return !!strstr(log, "-");
+            return !!g_strstr_len(log, -1, "-");
         }
     }
 

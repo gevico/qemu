@@ -453,6 +453,10 @@ struct Object
  *   function.
  * @abstract: If this field is true, then the class is considered abstract and
  *   cannot be directly instantiated.
+ * @secure: If this field is initialized to true, then the class is considered
+ *   to provide a security boundary. If initialized to false, the class does
+ *   not provide a security boundary. If uninitialized (and thus implicitly
+ *   false) its status is not yet defined.
  * @class_size: The size of the class object (derivative of #ObjectClass)
  *   for this object.  If @class_size is 0, then the size of the class will be
  *   assumed to be the size of the parent class.  This allows a type to avoid
@@ -469,6 +473,8 @@ struct Object
  * @class_data: Data to pass to the @class_init,
  *   @class_base_init. This can be useful when building dynamic
  *   classes.
+ * @is_available: callback invoked at registration time, to dynamically check if
+ *   this type should be available or not.
  * @interfaces: The list of interfaces associated with this type.  This
  *   should point to a static array that's terminated with a zero filled
  *   element.
@@ -485,12 +491,14 @@ struct TypeInfo
     void (*instance_finalize)(Object *obj);
 
     bool abstract;
+    bool secure;
     size_t class_size;
 
     void (*class_init)(ObjectClass *klass, const void *data);
     void (*class_base_init)(ObjectClass *klass, const void *data);
     const void *class_data;
 
+    bool (*is_available)(void);
     const InterfaceInfo *interfaces;
 };
 
@@ -1070,6 +1078,14 @@ const char *object_class_get_name(ObjectClass *klass);
  * Returns: %true if @klass is abstract, %false otherwise.
  */
 bool object_class_is_abstract(ObjectClass *klass);
+
+/**
+ * object_class_is_secure:
+ * @klass: The class to check security of
+ *
+ * Returns: %true if @klass is declared to be secure, %false if not declared
+ */
+bool object_class_is_secure(ObjectClass *klass);
 
 /**
  * object_class_by_name:
@@ -1802,8 +1818,8 @@ void object_property_allow_set_link(const Object *obj, const char *name,
  * property is read-only and cannot be set. Care must be taken to handle NULL
  * values for @val.
  *
- * Ownership of the pointer that @child points to is transferred to the
- * link property.  The reference count for *@child is
+ * Ownership of the pointer that @targetp points to is transferred to the
+ * link property.  The reference count for *@targetp is
  * managed by the property from after the function returns till the
  * property is deleted with object_property_del().  If the
  * @flags %OBJ_PROP_LINK_STRONG bit is set,
@@ -1818,6 +1834,33 @@ ObjectProperty *object_property_add_link(Object *obj, const char *name,
                                             Object *val, Error **errp),
                               ObjectPropertyLinkFlags flags);
 
+/**
+ * object_class_property_add_link:
+ * @oc: the object class to add a property to
+ * @name: the name of the property
+ * @type: the qobj type of the link
+ * @offset: the offset from the object instance where the link object reference
+ *   is stored
+ * @check: callback to veto setting or NULL if the property is read-only
+ * @flags: additional options for the link
+ *
+ * Links establish relationships between objects.  Links are unidirectional
+ * although two links can be combined to form a bidirectional relationship
+ * between objects.
+ *
+ * Links form the graph in the object model.
+ *
+ * The @check() callback is invoked when object_property_set_link() is called
+ * and can raise an error to prevent the link being set. If @check is NULL, the
+ * property is read-only and cannot be set. Care must be taken to handle NULL
+ * values for @val.
+ *
+ * If the @flags %OBJ_PROP_LINK_STRONG bit is set, the reference count of the
+ * linked object is incremented when the property is set, and decremented again
+ * when the property is modified.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_link(ObjectClass *oc,
                               const char *name,
                               const char *type, ptrdiff_t offset,
@@ -1859,6 +1902,19 @@ ObjectProperty *object_property_add_str(Object *obj, const char *name,
                              char *(*get)(Object *, Error **),
                              void (*set)(Object *, const char *, Error **));
 
+/**
+ * object_class_property_add_str:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @get: the getter or NULL if the property is write-only.  This function must
+ *   return a string to be freed by g_free().
+ * @set: the setter or NULL if the property is read-only
+ *
+ * Add a string property using getters/setters.  This function will add a
+ * property of type 'string'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_str(ObjectClass *klass,
                                    const char *name,
                                    char *(*get)(Object *, Error **),
@@ -1881,6 +1937,18 @@ ObjectProperty *object_property_add_bool(Object *obj, const char *name,
                               bool (*get)(Object *, Error **),
                               void (*set)(Object *, bool, Error **));
 
+/**
+ * object_class_property_add_bool:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @get: the getter or NULL if the property is write-only.
+ * @set: the setter or NULL if the property is read-only
+ *
+ * Add a bool property using getters/setters.  This function will add a
+ * property of type 'bool'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_bool(ObjectClass *klass,
                                     const char *name,
                                     bool (*get)(Object *, Error **),
@@ -1906,6 +1974,20 @@ ObjectProperty *object_property_add_enum(Object *obj, const char *name,
                               int (*get)(Object *, Error **),
                               void (*set)(Object *, int, Error **));
 
+/**
+ * object_class_property_add_enum:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @typename: the name of the enum data type
+ * @lookup: enum value namelookup table
+ * @get: the getter or %NULL if the property is write-only.
+ * @set: the setter or %NULL if the property is read-only
+ *
+ * Add an enum property using getters/setters.  This function will add a
+ * property of type '@typename'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_enum(ObjectClass *klass,
                                     const char *name,
                                     const char *typename,
@@ -1927,6 +2009,17 @@ ObjectProperty *object_class_property_add_enum(ObjectClass *klass,
 ObjectProperty *object_property_add_tm(Object *obj, const char *name,
                             void (*get)(Object *, struct tm *, Error **));
 
+/**
+ * object_class_property_add_tm:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @get: the getter or NULL if the property is write-only.
+ *
+ * Add a read-only struct tm valued property using a getter function.
+ * This function will add a property of type 'struct tm'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_tm(ObjectClass *klass,
                             const char *name,
                             void (*get)(Object *, struct tm *, Error **));
@@ -1939,6 +2032,24 @@ typedef enum {
     /* Automatically add a getter and a setter to the property */
     OBJ_PROP_FLAG_READWRITE = (OBJ_PROP_FLAG_READ | OBJ_PROP_FLAG_WRITE),
 } ObjectPropertyFlags;
+
+/**
+ * object_class_property_add_bool_ptr:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the bool value is
+ *   stored
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add an boolean property in memory.  This function will add a
+ * property of type 'bool'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *object_class_property_add_bool_ptr(ObjectClass *klass,
+                                         const char *name,
+                                         ptrdiff_t offset,
+                                         ObjectPropertyFlags flags);
 
 /**
  * object_property_add_uint8_ptr:
@@ -1956,7 +2067,43 @@ ObjectProperty *object_property_add_uint8_ptr(Object *obj, const char *name,
                                               const uint8_t *v,
                                               ObjectPropertyFlags flags);
 
+/**
+ * object_class_property_add_uint8_ptr:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the uint8 value is
+ *   stored
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add an integer property in memory.  This function will add a
+ * property of type 'uint8'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_uint8_ptr(ObjectClass *klass,
+                                         const char *name,
+                                         ptrdiff_t offset,
+                                         ObjectPropertyFlags flags);
+
+/**
+ * object_class_static_property_add_uint8_ptr:
+ * @klass: the object class to add a static property to
+ * @name: the name of the property
+ * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add a static integer property in memory.  This function will add a
+ * property of type 'uint8'.
+ *
+ * A static property is one which is stored outside of the object instance,
+ * typically in global variables. It is only appropriate to use static
+ * properties when the class is designed as a singleton. If there is a
+ * possibility of multiple instances, then properties must be stored
+ * per-instance.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *object_class_static_property_add_uint8_ptr(ObjectClass *klass,
                                          const char *name,
                                          const uint8_t *v,
                                          ObjectPropertyFlags flags);
@@ -1977,7 +2124,43 @@ ObjectProperty *object_property_add_uint16_ptr(Object *obj, const char *name,
                                     const uint16_t *v,
                                     ObjectPropertyFlags flags);
 
+/**
+ * object_class_property_add_uint16_ptr:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the uint16 value is
+ *   stored
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add an integer property in memory.  This function will add a
+ * property of type 'uint16'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_uint16_ptr(ObjectClass *klass,
+                                         const char *name,
+                                         ptrdiff_t offset,
+                                         ObjectPropertyFlags flags);
+
+/**
+ * object_class_static_property_add_uint16_ptr:
+ * @klass: the object class to add a static property to
+ * @name: the name of the property
+ * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add a static integer property in memory.  This function will add a
+ * property of type 'uint16'.
+ *
+ * A static property is one which is stored outside of the object instance,
+ * typically in global variables. It is only appropriate to use static
+ * properties when the class is designed as a singleton. If there is a
+ * possibility of multiple instances, then properties must be stored
+ * per-instance.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *object_class_static_property_add_uint16_ptr(ObjectClass *klass,
                                           const char *name,
                                           const uint16_t *v,
                                           ObjectPropertyFlags flags);
@@ -1998,7 +2181,43 @@ ObjectProperty *object_property_add_uint32_ptr(Object *obj, const char *name,
                                     const uint32_t *v,
                                     ObjectPropertyFlags flags);
 
+/**
+ * object_class_property_add_uint32_ptr:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the uint32 value is
+ *   stored
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add an integer property in memory.  This function will add a
+ * property of type 'uint32'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_uint32_ptr(ObjectClass *klass,
+                                    const char *name,
+                                    ptrdiff_t offset,
+                                    ObjectPropertyFlags flags);
+
+/**
+ * object_class_static_property_add_uint32_ptr:
+ * @klass: the object class to add a static property to
+ * @name: the name of the property
+ * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add a static integer property in memory.  This function will add a
+ * property of type 'uint32'.
+ *
+ * A static property is one which is stored outside of the object instance,
+ * typically in global variables. It is only appropriate to use static
+ * properties when the class is designed as a singleton. If there is a
+ * possibility of multiple instances, then properties must be stored
+ * per-instance.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *object_class_static_property_add_uint32_ptr(ObjectClass *klass,
                                           const char *name,
                                           const uint32_t *v,
                                           ObjectPropertyFlags flags);
@@ -2019,10 +2238,51 @@ ObjectProperty *object_property_add_uint64_ptr(Object *obj, const char *name,
                                     const uint64_t *v,
                                     ObjectPropertyFlags flags);
 
+/**
+ * object_class_property_add_uint64_ptr:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the uint64 value is
+ *   stored
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add an integer property in memory.  This function will add a
+ * property of type 'uint64'.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
 ObjectProperty *object_class_property_add_uint64_ptr(ObjectClass *klass,
+                                         const char *name,
+                                         ptrdiff_t offset,
+                                         ObjectPropertyFlags flags);
+
+/**
+ * object_class_static_property_add_uint64_ptr:
+ * @klass: the object class to add a static property to
+ * @name: the name of the property
+ * @v: pointer to value
+ * @flags: bitwise-or'd ObjectPropertyFlags
+ *
+ * Add a static integer property in memory.  This function will add a
+ * property of type 'uint64'.
+ *
+ * A static property is one which is stored outside of the object instance,
+ * typically in global variables. It is only appropriate to use static
+ * properties when the class is designed as a singleton. If there is a
+ * possibility of multiple instances, then properties must be stored
+ * per-instance.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *object_class_static_property_add_uint64_ptr(ObjectClass *klass,
                                           const char *name,
                                           const uint64_t *v,
                                           ObjectPropertyFlags flags);
+
+typedef enum {
+    /* private */
+    OBJ_PROP_ALIAS_CLASS = 0x1,
+} ObjectPropertyAliasFlags;
 
 /**
  * object_property_add_alias:
@@ -2043,6 +2303,43 @@ ObjectProperty *object_class_property_add_uint64_ptr(ObjectClass *klass,
  */
 ObjectProperty *object_property_add_alias(Object *obj, const char *name,
                                Object *target_obj, const char *target_name);
+
+/**
+ * object_class_property_add_alias:
+ * @klass: the object class to add a property to
+ * @name: the name of the property
+ * @offset: the offset from the object instance where the object alias is
+ *   stored
+ * @target_type: QOM type we expect the alias to resolve to
+ * @target_name: the name of the property on the forwarded object
+ *
+ * Add an alias for a property on an object.  This function will add a property
+ * of the same type as the forwarded property.
+ *
+ * Returns: The newly added property on success, or %NULL on failure.
+ */
+ObjectProperty *
+object_class_property_add_alias(ObjectClass *klass, const char *name,
+                                ptrdiff_t offset,
+                                const char *target_type,
+                                const char *target_name);
+
+/**
+ * object_property_set_alias:
+ * @obj: the object upon which to set the alias property
+ * @name: the name of the alias property
+ * @target_obj: the object to forward property access to
+ *
+ * Set an alias property on an object to point to @target_obj.  This is only
+ * required for class properties, and will assert at runtime if used on an
+ * object property.
+ *
+ * This function ensures that @target_obj stays alive as long as @obj exists
+ * by taking a reference if @target_obj is not a child object or an alias on
+ * the same object.
+ */
+void object_property_set_alias(Object *obj, const char *name,
+                               Object *target_obj);
 
 /**
  * object_property_add_const_link:
@@ -2075,6 +2372,17 @@ ObjectProperty *object_property_add_const_link(Object *obj, const char *name,
  */
 void object_property_set_description(Object *obj, const char *name,
                                      const char *description);
+
+/**
+ * object_class_property_set_description:
+ * @klass: the object class owning the property
+ * @name: the name of the property
+ * @description: the description of the property on the object
+ *
+ * Set an object property's description.
+ *
+ * Returns: %true on success, %false on failure.
+ */
 void object_class_property_set_description(ObjectClass *klass, const char *name,
                                            const char *description);
 
@@ -2138,6 +2446,19 @@ Object *object_property_add_new_container(Object *obj, const char *name);
  */
 char *object_property_help(const char *name, const char *type,
                            QObject *defval, const char *description);
+
+/**
+ * object_class_check_security:
+ * @klass: the object class to check
+ * @errp: a pointer to an Error that is filled if not compliant
+ *
+ * Check whether the object class @klass complies with the
+ * currently requested security policy. Reports an error
+ * in @errp if not compliant.
+ *
+ * Returns: true if compliant, false if an error was raised
+ */
+bool object_class_check_security(ObjectClass *klass, Error **errp);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(Object, object_unref)
 

@@ -26,7 +26,6 @@
 #include "hw/core/sysbus.h"
 #include "hw/riscv/k230.h"
 #include "hw/riscv/boot.h"
-#include "hw/riscv/machines-qom.h"
 #include "hw/intc/riscv_aclint.h"
 #include "hw/intc/sifive_plic.h"
 #include "hw/char/serial-mm.h"
@@ -97,6 +96,7 @@ static const MemMapEntry memmap[] = {
     [K230_DEV_SPI] =          { 0x91584000,  0x00001000 },
     [K230_DEV_HI_SYS_CFG] =   { 0x91585000,  0x00000400 },
     [K230_DEV_DDRC_CFG] =     { 0x98000000,  0x02000000 },
+    [K230_DEV_DDR_PHY] =      { 0x9A000000,  0x00400000 },
     [K230_DEV_FLASH] =        { 0xC0000000,  0x08000000 },
     [K230_DEV_PLIC] =         { 0xF00000000, 0x00400000 },
     [K230_DEV_CLINT] =        { 0xF04000000, 0x00400000 },
@@ -108,8 +108,16 @@ static void k230_soc_init(Object *obj)
     RISCVHartArrayState *cpu0 = &s->c908_cpu;
 
     object_initialize_child(obj, "c908-cpu", cpu0, TYPE_RISCV_HART_ARRAY);
+    object_initialize_child(obj, "ddr-cfg", &s->ddr_cfg,
+                            TYPE_K230_DDR_CFG);
+    object_initialize_child(obj, "ddr-phy", &s->ddr_phy,
+                            TYPE_K230_DDR_PHY);
+    s->ddr_cfg.phy = &s->ddr_phy;
     object_initialize_child(obj, "k230-wdt0", &s->wdt[0], TYPE_K230_WDT);
     object_initialize_child(obj, "k230-wdt1", &s->wdt[1], TYPE_K230_WDT);
+    object_initialize_child(obj, "k230-gsdma", &s->gsdma, TYPE_K230_GSDMA);
+    object_initialize_child(obj, "k230-decomp-gzip", &s->decomp_gzip,
+                            TYPE_K230_DECOMP_GZIP);
 
     qdev_prop_set_uint32(DEVICE(cpu0), "hartid-base", 0);
     qdev_prop_set_string(DEVICE(cpu0), "cpu-type", TYPE_RISCV_CPU_THEAD_C908);
@@ -125,7 +133,8 @@ static DeviceState *k230_create_plic(int base_hartid, int hartid_count)
     plic_hart_config = riscv_plic_hart_config_string(hartid_count);
 
     /* Per-socket PLIC */
-    return sifive_plic_create(memmap[K230_DEV_PLIC].base,
+    return sifive_plic_create(get_system_memory(),
+                              memmap[K230_DEV_PLIC].base,
                               plic_hart_config, hartid_count, base_hartid,
                               K230_PLIC_NUM_SOURCES,
                               K230_PLIC_NUM_PRIORITIES,
@@ -158,6 +167,16 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     int c908_cpus;
 
     sysbus_realize(SYS_BUS_DEVICE(&s->c908_cpu), &error_fatal);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_cfg), errp)) {
+        return;
+    }
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->ddr_phy), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_cfg), 0,
+                    memmap[K230_DEV_DDRC_CFG].base);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ddr_phy), 0,
+                    memmap[K230_DEV_DDR_PHY].base);
 
     c908_cpus = s->c908_cpu.num_harts;
 
@@ -177,9 +196,11 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     s->c908_plic = k230_create_plic(C908_CPU_HARTID, c908_cpus);
 
     /* CLINT */
-    riscv_aclint_swi_create(memmap[K230_DEV_CLINT].base,
+    riscv_aclint_swi_create(sys_mem,
+                            memmap[K230_DEV_CLINT].base,
                             C908_CPU_HARTID, c908_cpus, false);
-    riscv_aclint_mtimer_create(memmap[K230_DEV_CLINT].base + 0x4000,
+    riscv_aclint_mtimer_create(sys_mem,
+                               memmap[K230_DEV_CLINT].base + 0x4000,
                                RISCV_ACLINT_DEFAULT_MTIMER_SIZE,
                                C908_CPU_HARTID, c908_cpus,
                                RISCV_ACLINT_DEFAULT_MTIMECMP,
@@ -206,6 +227,34 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt[1]), 0,
                        qdev_get_gpio_in(DEVICE(s->c908_plic), K230_WDT1_IRQ));
 
+    /* Gsdma */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->gsdma), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gsdma), 0, memmap[K230_DEV_GSDMA].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->gsdma), 0,
+                       qdev_get_gpio_in(DEVICE(s->c908_plic), K230_GSDMA_IRQ));
+
+    /* Decomp gzip */
+    qdev_prop_set_uint64(DEVICE(&s->decomp_gzip), "sram-base",
+                         memmap[K230_DEV_SRAM].base);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->decomp_gzip), errp)) {
+        return;
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->decomp_gzip), 0,
+                    memmap[K230_DEV_DECOMP_GZIP].base);
+    for (int i = 0; i < K230_DECOMP_GZIP_NUM_GPIOS_OUT; i++) {
+        qdev_connect_gpio_out(DEVICE(&s->decomp_gzip), i,
+                              qdev_get_gpio_in(DEVICE(&s->gsdma), i));
+    }
+    for (int i = 0; i < K230_DECOMP_GZIP_NUM_GPIOS_IN; i++) {
+        qdev_connect_gpio_out(DEVICE(&s->gsdma), i,
+                              qdev_get_gpio_in(DEVICE(&s->decomp_gzip), i));
+    }
+
+    /* Noc stub, the k230 decomp_gzip driver in uboot will access this region */
+    create_unimplemented_device("noc-stub", 0x91302000, 0x1000);
+
     /* unimplemented devices */
     create_unimplemented_device("kpu.l2-cache",
                                 memmap[K230_DEV_KPU_L2_CACHE].base,
@@ -221,15 +270,8 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
                                 memmap[K230_DEV_AI_2D_ENGINE].base,
                                 memmap[K230_DEV_AI_2D_ENGINE].size);
 
-    create_unimplemented_device("gsdma", memmap[K230_DEV_GSDMA].base,
-                                memmap[K230_DEV_GSDMA].size);
-
     create_unimplemented_device("dma", memmap[K230_DEV_DMA].base,
                                 memmap[K230_DEV_DMA].size);
-
-    create_unimplemented_device("decomp-gzip",
-                                memmap[K230_DEV_DECOMP_GZIP].base,
-                                memmap[K230_DEV_DECOMP_GZIP].size);
 
     create_unimplemented_device("2d-engine.non-ai",
                                 memmap[K230_DEV_NON_AI_2D].base,
@@ -360,9 +402,6 @@ static void k230_soc_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("hi_sys_cfg", memmap[K230_DEV_HI_SYS_CFG].base,
                                 memmap[K230_DEV_HI_SYS_CFG].size);
-
-    create_unimplemented_device("ddrc_cfg", memmap[K230_DEV_DDRC_CFG].base,
-                                memmap[K230_DEV_DDRC_CFG].size);
 
     create_unimplemented_device("flash", memmap[K230_DEV_FLASH].base,
                                 memmap[K230_DEV_FLASH].size);
@@ -519,7 +558,6 @@ static const TypeInfo k230_machine_typeinfo = {
     .class_init = k230_machine_class_init,
     .instance_init = k230_machine_instance_init,
     .instance_size = sizeof(K230MachineState),
-    .interfaces = riscv64_machine_interfaces,
 };
 
 static void k230_machine_init_register_types(void)

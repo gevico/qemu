@@ -21,10 +21,24 @@
 #define HAVE_ELF_HWCAP          1
 #define HAVE_ELF_CORE_DUMP      1
 
+/* See linux kernel: ARCH_HAS_ELF_CORE_EFLAGS.  */
+#define elf_core_eflags(info)   ((info)->elf_flags)
+
 /* Mirrors struct user_regs_struct: pc followed by x1 (ra) .. x31 (t6). */
 typedef struct target_elf_gregset_t {
     abi_ulong pc;
     abi_ulong regs[31];
 } target_elf_gregset_t;
+
+#define HAVE_ELF_CORE_FPREGS    1
+
+/*
+ * Matches struct __riscv_d_ext_state from uapi/asm/ptrace.h:
+ *   f0-f31 as 64-bit values followed by fcsr.
+ */
+typedef struct target_elf_fpregset_t {
+    uint64_t fpr[32];
+    uint32_t fcsr;
+} target_elf_fpregset_t;
 
 #endif

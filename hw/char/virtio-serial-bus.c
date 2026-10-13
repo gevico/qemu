@@ -25,6 +25,7 @@
 #include "qemu/module.h"
 #include "migration/qemu-file-types.h"
 #include "monitor/monitor.h"
+#include "monitor/hmp.h"
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
 #include "hw/core/qdev-properties.h"
@@ -763,6 +764,10 @@ static int fetch_active_ports_list(QEMUFile *f,
 
             port->elem =
                 qemu_get_virtqueue_element(vdev, f, sizeof(VirtQueueElement));
+            if (!port->elem) {
+                error_report("Failed to restore virtio-serial element");
+                return -EINVAL;
+            }
 
             /*
              *  Port was throttled on source machine.  Let's
@@ -813,7 +818,9 @@ static int virtio_serial_load_device(VirtIODevice *vdev, QEMUFile *f,
     return 0;
 }
 
-static void virtser_bus_dev_print(Monitor *mon, DeviceState *qdev, int indent);
+#ifdef CONFIG_HMP
+static void virtser_bus_dev_print(MonitorHMP *hmp, DeviceState *qdev, int indent);
+#endif
 
 static const Property virtser_props[] = {
     DEFINE_PROP_UINT32("nr", VirtIOSerialPort, id, VIRTIO_CONSOLE_BAD_ID),
@@ -822,8 +829,10 @@ static const Property virtser_props[] = {
 
 static void virtser_bus_class_init(ObjectClass *klass, const void *data)
 {
+#ifdef CONFIG_HMP
     BusClass *k = BUS_CLASS(klass);
     k->print_dev = virtser_bus_dev_print;
+#endif
 }
 
 static const TypeInfo virtser_bus_info = {
@@ -833,16 +842,18 @@ static const TypeInfo virtser_bus_info = {
     .class_init = virtser_bus_class_init,
 };
 
-static void virtser_bus_dev_print(Monitor *mon, DeviceState *qdev, int indent)
+#ifdef CONFIG_HMP
+static void virtser_bus_dev_print(MonitorHMP *hmp, DeviceState *qdev, int indent)
 {
     VirtIOSerialPort *port = VIRTIO_SERIAL_PORT(qdev);
 
-    monitor_printf(mon, "%*sport %d, guest %s, host %s, throttle %s\n",
-                   indent, "", port->id,
-                   port->guest_connected ? "on" : "off",
-                   port->host_connected ? "on" : "off",
-                   port->throttled ? "on" : "off");
+    monitor_hmp_printf(hmp, "%*sport %d, guest %s, host %s, throttle %s\n",
+                       indent, "", port->id,
+                       port->guest_connected ? "on" : "off",
+                       port->host_connected ? "on" : "off",
+                       port->throttled ? "on" : "off");
 }
+#endif
 
 /* This function is only used if a port id is not provided by the user */
 static uint32_t find_free_port_id(VirtIOSerial *vser)
@@ -968,7 +979,7 @@ static void virtser_port_device_realize(DeviceState *dev, Error **errp)
     port->elem = NULL;
 }
 
-static void virtser_port_device_plug(HotplugHandler *hotplug_dev,
+static void virtser_port_device_plug(const HotplugHandler *hotplug_dev,
                                      DeviceState *dev, Error **errp)
 {
     VirtIOSerialPort *port = VIRTIO_SERIAL_PORT(dev);

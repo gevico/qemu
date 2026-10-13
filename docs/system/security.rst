@@ -133,10 +133,66 @@ an issue as a normal bug.
   that affect the level 0 QEMU process. While these bugs should be
   fixed, they will not be triaged as security flaws at this time.
 
+* **migration/snapshots**. Migration failures and snapshot load
+  failures are considered part of normal operation as long as the
+  source virtual machine and savevm file, respectively, are still
+  functional. Aborting the QEMU process at the migration/snapshot
+  destination is similarly not considered a security issue. The
+  migration stream is assumed to be secure as long as the design
+  principles described in the Architecture section are held, in
+  which case plain manipulation of the stream is not considered as
+  an attack vector.
+
+* **uninitialized stack variables**. If the bug scenario relies on
+  undefined behaviour from stack variables that lack explicit
+  initialization, it will not usually be considered a security flaw.
+  The build system adds '-ftrivial-auto-var-init=zero', which is
+  available in both the supported compilers (GCC and CLang) and
+  ensures all stack variables have implicit zero-initializers.
+  This eliminates undefined behaviour and usually gives the
+  correct desired initialization value, eliminating most of the
+  bug scenarios wrt uninitialized stack variables.
+
 * **low severity impact**. As a catch all rule, issues which
   are judged to have a "low" severity impact on the system will
   usually not justify handling as security bugs, nor assignment
   of CVEs. They will be fixed as routine bugs when time allows.
+
+Security status reporting
+'''''''''''''''''''''''''
+
+The QEMU project annotates types to explicitly state whether they are
+considered to provide a security boundary or not. For machine, accelerator
+and device types, only those annotated with the "secure" flag will be
+eligible for CVE assignment. Annotations will be extended to other backend
+and object types over time, to make their security status explicit.
+
+It is possible to control or identify the usage of types that do not offer
+an explicit security boundary using the ``insecure-types`` parameter to the
+``-compat`` argument, which accepts three values:
+
+ * accept: usage of any type will be permitted. This is the current
+   and historical default behaviour
+ * warn: usage of types not explicitly declared secure will result
+   in a warning message, but still be permitted.
+ * reject: usage of types not explicitly declared secure will result
+   in an error message, and will not be permitted.
+
+The compatibility policy will be honoured both at initial startup of
+QEMU and during any runtime alterations made with monitor commands.
+
+The status of any type class can be queried at runtime using the
+``qom-list-types`` command, whose returned information will flag any
+types declared as secure. The ``query-machines`` command will also
+reflect this same information for machine types.
+
+Machine type, accelerator and device security status can be queried
+using ``-machine help``, ``-accel help`` and ``-device help`` command
+line options respectively.
+
+Setting the ``.secure`` field to ``true`` in the ``TypeInfo``
+instance for an Object class, declares that the type aims to provide
+a security boundary.
 
 Architecture
 ------------
@@ -159,10 +215,11 @@ could allow malicious guests to gain code execution in QEMU.  At this point the
 guest has escaped the virtual machine and is able to act in the context of the
 QEMU process on the host.
 
-Guests often interact with other guests and share resources with them.  A
-malicious guest must not gain control of other guests or access their data.
-Disk image files and network traffic must be protected from other guests unless
-explicitly shared between them by the user.
+Guests often interact with other guests and share resources with them.
+A malicious guest must not gain control of other guests or access
+their data.  Disk image files and network traffic must be protected
+from other guests, users and processes unless explicitly shared with
+them by the user.
 
 Principle of Least Privilege
 ''''''''''''''''''''''''''''
@@ -222,6 +279,9 @@ Some Linux distros already ship with UNIX groups for these devices by default.
 - Linux seccomp is available via the QEMU ``--sandbox`` option.  It disables
   system calls that are not needed by QEMU, thereby reducing the host kernel
   attack surface.
+
+- Transport Layer Security (TLS) protocol can be used to ensure authenticity and
+  encryption of the live migration connection where the network is untrusted.
 
 Sensitive configurations
 ------------------------

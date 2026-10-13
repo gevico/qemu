@@ -180,7 +180,7 @@ static void pmac_ide_transfer_cb(void *opaque, int ret)
     switch (s->dma_cmd) {
     case IDE_DMA_READ:
         s->bus->dma->aiocb = dma_blk_read(s->blk, &s->sg, offset, 0x1,
-                                          pmac_ide_atapi_transfer_cb, io);
+                                          pmac_ide_transfer_cb, io);
         break;
     case IDE_DMA_WRITE:
         s->bus->dma->aiocb = dma_blk_write(s->blk, &s->sg, offset, 0x1,
@@ -368,7 +368,7 @@ static void macio_ide_reset(DeviceState *dev)
 {
     MACIOIDEState *d = MACIO_IDE(dev);
 
-    ide_bus_reset(&d->bus);
+    ide_bus_reset(&d->bus, IDE_RESET_HARDWARE);
 }
 
 static int ide_nop_int(const IDEDMA *dma, bool is_write)

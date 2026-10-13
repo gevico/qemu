@@ -323,7 +323,7 @@ static void amdvi_setevent_bits(uint64_t *buffer, uint64_t value, int start,
                                 int length)
 {
     int index = start / 64, bitpos = start % 64;
-    uint64_t mask = MAKE_64BIT_MASK(start, length);
+    uint64_t mask = MAKE_64BIT_MASK(bitpos, length);
     buffer[index] &= ~mask;
     buffer[index] |= (value << bitpos) & mask;
 }
@@ -2595,7 +2595,7 @@ static void amdvi_pci_realize(PCIDevice *pdev, Error **errp)
                  0xff000000);
     pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_MISC, 0);
     pci_set_long(pdev->config + s->capab_offset + AMDVI_CAPAB_MISC,
-            AMDVI_MAX_PH_ADDR | AMDVI_MAX_GVA_ADDR | AMDVI_MAX_VA_ADDR);
+            AMDVI_PA_SIZE_52 | AMDVI_GVA_SIZE_48 | AMDVI_VA_SIZE_64);
 }
 
 static void amdvi_sysbus_reset(DeviceState *dev)

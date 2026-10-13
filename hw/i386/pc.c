@@ -74,6 +74,9 @@
 #include "hw/xen/xen-bus.h"
 #endif
 
+GlobalProperty pc_compat_11_1[] = {};
+const size_t pc_compat_11_1_len = G_N_ELEMENTS(pc_compat_11_1);
+
 GlobalProperty pc_compat_11_0[] = {};
 const size_t pc_compat_11_0_len = G_N_ELEMENTS(pc_compat_11_0);
 
@@ -82,7 +85,6 @@ const size_t pc_compat_10_2_len = G_N_ELEMENTS(pc_compat_10_2);
 
 GlobalProperty pc_compat_10_1[] = {
     { "mch", "extended-tseg-mbytes", "16" },
-    { TYPE_X86_CPU, "x-migrate-error-code", "false" },
 };
 const size_t pc_compat_10_1_len = G_N_ELEMENTS(pc_compat_10_1);
 
@@ -870,9 +872,9 @@ void pc_memory_init(PCMachineState *pcms,
 
     if (!is_tdx_vm()) {
         option_rom_mr = g_malloc(sizeof(*option_rom_mr));
-        if (machine_require_guest_memfd(machine)) {
-            memory_region_init_ram_guest_memfd(option_rom_mr, NULL, "pc.rom",
-                                            PC_ROM_SIZE, &error_fatal);
+        if (machine_require_guest_memfd_private(machine)) {
+            memory_region_init_ram_guest_memfd_private(
+                option_rom_mr, NULL, "pc.rom", PC_ROM_SIZE, &error_fatal);
         } else {
             memory_region_init_ram(option_rom_mr, NULL, "pc.rom", PC_ROM_SIZE,
                                 &error_fatal);
@@ -1094,8 +1096,7 @@ void pc_basic_device_init(struct PCMachineState *pcms,
         qdev_connect_gpio_out(DEVICE(rtc_state), 0, rtc_irq);
     }
 
-    object_property_add_alias(OBJECT(pcms), "rtc-time", OBJECT(rtc_state),
-                              "date");
+    object_property_set_alias(OBJECT(pcms), "rtc-time", OBJECT(rtc_state));
 
 #ifdef CONFIG_XEN_EMU
     if (xen_mode == XEN_EMULATE) {
@@ -1178,7 +1179,7 @@ void pc_i8259_create(ISABus *isa_bus, qemu_irq *i8259_irqs)
     g_free(i8259);
 }
 
-static void pc_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
+static void pc_memory_pre_plug(const HotplugHandler *hotplug_dev, DeviceState *dev,
                                Error **errp)
 {
     const X86MachineState *x86ms = X86_MACHINE(hotplug_dev);
@@ -1211,7 +1212,7 @@ static void pc_memory_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
     pc_dimm_pre_plug(PC_DIMM(dev), MACHINE(hotplug_dev), errp);
 }
 
-static void pc_memory_plug(HotplugHandler *hotplug_dev,
+static void pc_memory_plug(const HotplugHandler *hotplug_dev,
                            DeviceState *dev, Error **errp)
 {
     PCMachineState *pcms = PC_MACHINE(hotplug_dev);
@@ -1228,7 +1229,7 @@ static void pc_memory_plug(HotplugHandler *hotplug_dev,
     hotplug_handler_plug(x86ms->acpi_dev, dev, &error_abort);
 }
 
-static void pc_memory_unplug_request(HotplugHandler *hotplug_dev,
+static void pc_memory_unplug_request(const HotplugHandler *hotplug_dev,
                                      DeviceState *dev, Error **errp)
 {
     X86MachineState *x86ms = X86_MACHINE(hotplug_dev);
@@ -1253,7 +1254,7 @@ static void pc_memory_unplug_request(HotplugHandler *hotplug_dev,
                                    errp);
 }
 
-static void pc_memory_unplug(HotplugHandler *hotplug_dev,
+static void pc_memory_unplug(const HotplugHandler *hotplug_dev,
                              DeviceState *dev, Error **errp)
 {
     PCMachineState *pcms = PC_MACHINE(hotplug_dev);
@@ -1271,7 +1272,7 @@ static void pc_memory_unplug(HotplugHandler *hotplug_dev,
     error_propagate(errp, local_err);
 }
 
-static void pc_hv_balloon_pre_plug(HotplugHandler *hotplug_dev,
+static void pc_hv_balloon_pre_plug(const HotplugHandler *hotplug_dev,
                                    DeviceState *dev, Error **errp)
 {
     /* The vmbus handler has no hotplug handler; we should never end up here. */
@@ -1279,13 +1280,13 @@ static void pc_hv_balloon_pre_plug(HotplugHandler *hotplug_dev,
     memory_device_pre_plug(MEMORY_DEVICE(dev), MACHINE(hotplug_dev), errp);
 }
 
-static void pc_hv_balloon_plug(HotplugHandler *hotplug_dev,
+static void pc_hv_balloon_plug(const HotplugHandler *hotplug_dev,
                                DeviceState *dev, Error **errp)
 {
     memory_device_plug(MEMORY_DEVICE(dev), MACHINE(hotplug_dev));
 }
 
-static void pc_sp_mem_pre_plug(HotplugHandler *hotplug_dev,
+static void pc_sp_mem_pre_plug(const HotplugHandler *hotplug_dev,
                                DeviceState *dev, Error **errp)
 {
     MachineState *ms = MACHINE(hotplug_dev);
@@ -1301,7 +1302,7 @@ static void pc_sp_mem_pre_plug(HotplugHandler *hotplug_dev,
     memory_device_pre_plug(MEMORY_DEVICE(dev), ms, errp);
 }
 
-static void pc_sp_mem_plug(HotplugHandler *hotplug_dev,
+static void pc_sp_mem_plug(const HotplugHandler *hotplug_dev,
                            DeviceState *dev, Error **errp)
 {
     SpMemDevice *spm = SP_MEM(dev);
@@ -1315,7 +1316,7 @@ static void pc_sp_mem_plug(HotplugHandler *hotplug_dev,
     e820_add_entry(addr, size, E820_SOFT_RESERVED);
 }
 
-static void pc_machine_device_pre_plug_cb(HotplugHandler *hotplug_dev,
+static void pc_machine_device_pre_plug_cb(const HotplugHandler *hotplug_dev,
                                           DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PC_DIMM)) {
@@ -1353,7 +1354,7 @@ static void pc_machine_device_pre_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void pc_machine_device_plug_cb(HotplugHandler *hotplug_dev,
+static void pc_machine_device_plug_cb(const HotplugHandler *hotplug_dev,
                                       DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PC_DIMM)) {
@@ -1369,7 +1370,7 @@ static void pc_machine_device_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void pc_machine_device_unplug_request_cb(HotplugHandler *hotplug_dev,
+static void pc_machine_device_unplug_request_cb(const HotplugHandler *hotplug_dev,
                                                 DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PC_DIMM)) {
@@ -1385,7 +1386,7 @@ static void pc_machine_device_unplug_request_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void pc_machine_device_unplug_cb(HotplugHandler *hotplug_dev,
+static void pc_machine_device_unplug_cb(const HotplugHandler *hotplug_dev,
                                         DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PC_DIMM)) {
@@ -1400,8 +1401,8 @@ static void pc_machine_device_unplug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static HotplugHandler *pc_get_hotplug_handler(MachineState *machine,
-                                             DeviceState *dev)
+static const HotplugHandler *pc_get_hotplug_handler(MachineState *machine,
+                                                    DeviceState *dev)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PC_DIMM) ||
         object_dynamic_cast(OBJECT(dev), TYPE_SP_MEM) ||
@@ -1640,8 +1641,8 @@ static void pc_machine_initfn(Object *obj)
 
     pc_system_flash_create(pcms);
     pcms->pcspk = isa_new(TYPE_PC_SPEAKER);
-    object_property_add_alias(OBJECT(pcms), "pcspk-audiodev",
-                              OBJECT(pcms->pcspk), "audiodev");
+    object_property_set_alias(OBJECT(pcms), "pcspk-audiodev",
+                              OBJECT(pcms->pcspk));
     if (pcmc->pci_enabled) {
         cxl_machine_init(obj, &pcms->cxl_devices_state);
     }
@@ -1785,7 +1786,27 @@ static void pc_machine_class_init(ObjectClass *oc, const void *data)
                                           "Set IGVM configuration");
 #endif
 
-
+    object_class_property_add_alias(oc, "pcspk-audiodev",
+                                    offsetof(PCMachineState, alias_pcspk),
+                                    TYPE_PC_SPEAKER,
+                                    "audiodev");
+    object_class_property_add_alias(oc, "rtc-time",
+                                    offsetof(PCMachineState, alias_rtc_time),
+                                    TYPE_MC146818_RTC,
+                                    "date");
+    object_class_property_add_link(oc, PC_MACHINE_ACPI_DEVICE_PROP,
+                                   TYPE_HOTPLUG_HANDLER,
+                                   offsetof(X86MachineState, acpi_dev),
+                                   object_property_allow_set_link,
+                                   OBJ_PROP_LINK_STRONG);
+    object_class_property_add_alias(oc, "pflash0",
+                                    offsetof(PCMachineState, alias_pflash0),
+                                    TYPE_PFLASH_CFI01,
+                                    "drive");
+    object_class_property_add_alias(oc, "pflash1",
+                                    offsetof(PCMachineState, alias_pflash1),
+                                    TYPE_PFLASH_CFI01,
+                                    "drive");
 }
 
 static const TypeInfo pc_machine_info = {

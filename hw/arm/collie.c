@@ -15,7 +15,6 @@
 #include "hw/core/boards.h"
 #include "strongarm.h"
 #include "hw/arm/boot.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/block/flash.h"
 #include "system/address-spaces.h"
 #include "qom/object.h"
@@ -30,15 +29,11 @@ struct CollieMachineState {
     MachineState parent;
 
     StrongARMState *sa1110;
+    struct arm_boot_info bootinfo;
 };
 
 #define TYPE_COLLIE_MACHINE MACHINE_TYPE_NAME("collie")
 OBJECT_DECLARE_SIMPLE_TYPE(CollieMachineState, COLLIE_MACHINE)
-
-static struct arm_boot_info collie_binfo = {
-    .loader_start = SA_SDCS0,
-    .ram_size = RAM_SIZE,
-};
 
 static void collie_init(MachineState *machine)
 {
@@ -66,8 +61,10 @@ static void collie_init(MachineState *machine)
 
     sysbus_create_simple("scoop", 0x40800000, NULL);
 
-    collie_binfo.board_id = 0x208;
-    arm_load_kernel(cms->sa1110->cpu, machine, &collie_binfo);
+    cms->bootinfo.loader_start = SA_SDCS0;
+    cms->bootinfo.ram_size = RAM_SIZE;
+    cms->bootinfo.board_id = 0x208;
+    arm_load_kernel(cms->sa1110->cpu, machine, &cms->bootinfo);
 }
 
 static void collie_machine_class_init(ObjectClass *oc, const void *data)
@@ -87,7 +84,6 @@ static const TypeInfo collie_machine_typeinfo = {
     .parent = TYPE_MACHINE,
     .class_init = collie_machine_class_init,
     .instance_size = sizeof(CollieMachineState),
-    .interfaces = arm_machine_interfaces,
 };
 
 static void collie_machine_register_types(void)

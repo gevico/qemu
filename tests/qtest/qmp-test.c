@@ -151,11 +151,28 @@ static void test_qmp_protocol(void)
     g_assert_cmpstr(qdict_get_try_str(resp, "id"), ==, "cookie#1");
     qobject_unref(resp);
 
-    /* Test command failure with 'id' */
-    resp = qtest_qmp(qts, "{ 'execute': 'human-monitor-command', 'id': 2 }");
+    /* Test integer 'id' is echoed back on success */
+    resp = qtest_qmp(qts, "{ 'execute': 'query-name', 'id': 2 }");
     g_assert_cmpint(qdict_get_int(resp, "id"), ==, 2);
+    qobject_unref(resp);
+
+    /* Test integer 'id' is echoed back on failure */
+    resp = qtest_qmp(qts, "{ 'execute': 'block_resize', 'id': 3 }");
+    g_assert_cmpint(qdict_get_int(resp, "id"), ==, 3);
     qmp_expect_error_and_unref(resp, "GenericError");
 
+    qtest_quit(qts);
+}
+
+static void test_query_target(void)
+{
+    QTestState *qts = qtest_init(common_args);
+    QDict *target;
+
+    target = qtest_qmp_assert_success_ref(qts,
+                                          "{ 'execute': 'query-target' }");
+    g_assert_cmpstr(qdict_get_try_str(target, "arch"), ==, qtest_get_arch());
+    qobject_unref(target);
     qtest_quit(qts);
 }
 
@@ -487,6 +504,7 @@ static void test_qmp_monitor_remove_cli(void)
     qtest_quit(qts);
 }
 
+#ifdef CONFIG_HMP
 static void test_qmp_monitor_remove_hmp(void)
 {
     QTestState *qts;
@@ -504,12 +522,14 @@ static void test_qmp_monitor_remove_hmp(void)
 
     qtest_quit(qts);
 }
+#endif
 
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
 
     qtest_add_func("qmp/protocol", test_qmp_protocol);
+    qtest_add_func("qmp/query-target", test_query_target);
 #ifndef _WIN32
     /* This case calls mkfifo() which does not exist on win32 */
     qtest_add_func("qmp/oob", test_qmp_oob);
@@ -521,7 +541,9 @@ int main(int argc, char *argv[])
     qtest_add_func("qmp/monitor-chardev-in-use",
                     test_qmp_monitor_chardev_in_use);
     qtest_add_func("qmp/monitor-remove-cli", test_qmp_monitor_remove_cli);
+#ifdef CONFIG_HMP
     qtest_add_func("qmp/monitor-remove-hmp", test_qmp_monitor_remove_hmp);
+#endif
 
     return g_test_run();
 }

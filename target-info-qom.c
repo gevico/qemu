@@ -12,29 +12,6 @@
 #include "qemu/target-info-impl.h"
 #include "qemu/target-info-init.h"
 #include "qemu/target-info-qom.h"
-#include "hw/arm/machines-qom.h"
-#include "hw/riscv/machines-qom.h"
-
-static const TypeInfo target_info_types[] = {
-    {
-        .name           = TYPE_TARGET_ARM_MACHINE,
-        .parent         = TYPE_INTERFACE,
-    },
-    {
-        .name           = TYPE_TARGET_AARCH64_MACHINE,
-        .parent         = TYPE_INTERFACE,
-    },
-    {
-        .name           = TYPE_TARGET_RISCV32_MACHINE,
-        .parent         = TYPE_INTERFACE,
-    },
-    {
-        .name           = TYPE_TARGET_RISCV64_MACHINE,
-        .parent         = TYPE_INTERFACE,
-    },
-};
-
-DEFINE_TYPES(target_info_types)
 
 static void target_info_qom_class_init(ObjectClass *oc, const void * data)
 {
@@ -75,4 +52,9 @@ void target_info_qom_set_target(void)
     }
 
     target_info_ptr = TARGET_INFO_CLASS(targets->data)->target_info;
+}
+
+void target_info_qom_set_target_info(const TargetInfo *ti)
+{
+    target_info_ptr = ti;
 }

@@ -233,6 +233,10 @@ typedef enum {
     OPC_CPOPW  = 0x6020101b,
     OPC_CTZ    = 0x60101013,
     OPC_CTZW   = 0x6010101b,
+    OPC_MAX    = 0x0a006033,
+    OPC_MAXU   = 0x0a007033,
+    OPC_MIN    = 0x0a004033,
+    OPC_MINU   = 0x0a005033,
     OPC_ORN    = 0x40006033,
     OPC_REV8   = 0x6b805013,
     OPC_ROL    = 0x60001033,
@@ -245,6 +249,9 @@ typedef enum {
     OPC_SEXT_H = 0x60501013,
     OPC_XNOR   = 0x40004033,
     OPC_ZEXT_H = 0x0800403b,
+
+    /* Zbkb: Bit Manipulation for Cryptography */
+    OPC_BREV8  = 0x68705013,
 
     /* Zicond: integer conditional operations */
     OPC_CZERO_EQZ = 0x0e005033,
@@ -768,6 +775,7 @@ static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
     case TCG_TYPE_V64:
     case TCG_TYPE_V128:
     case TCG_TYPE_V256:
+        tcg_debug_assert(s->riscv_cur_type != TCG_TYPE_COUNT);
         {
             int lmul = type - riscv_lg2_vlenb;
             int nf = 1 << MAX(lmul, 0);
@@ -1007,6 +1015,10 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg arg,
             unsigned idx = type - riscv_lg2_vlenb;
 
             tcg_debug_assert(idx < ARRAY_SIZE(whole_reg_ld));
+            /* We must initialize vtype to something to avoid VILL. */
+            if (s->riscv_cur_type == TCG_TYPE_COUNT) {
+                set_vtype(s, type, MO_8);
+            }
             insn = whole_reg_ld[idx];
         } else {
             static const RISCVInsn unit_stride_ld[] = {
@@ -1039,6 +1051,7 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg,
     case TCG_TYPE_V64:
     case TCG_TYPE_V128:
     case TCG_TYPE_V256:
+        tcg_debug_assert(s->riscv_cur_type != TCG_TYPE_COUNT);
         if (type >= riscv_lg2_vlenb) {
             static const RISCVInsn whole_reg_st[] = {
                 OPC_VS1R_V, OPC_VS2R_V, OPC_VS4R_V, OPC_VS8R_V
@@ -2401,6 +2414,54 @@ static void tcg_out_set_borrow(TCGContext *s)
     g_assert_not_reached();
 }
 
+static void tgen_smax(TCGContext *s, TCGType type,
+                      TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_opc_reg(s, OPC_MAX, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_smax = {
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_zbb_rrr,
+    .out_rrr = tgen_smax,
+};
+
+static void tgen_smin(TCGContext *s, TCGType type,
+                      TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_opc_reg(s, OPC_MIN, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_smin = {
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_zbb_rrr,
+    .out_rrr = tgen_smin,
+};
+
+static void tgen_umax(TCGContext *s, TCGType type,
+                      TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_opc_reg(s, OPC_MAXU, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_umax = {
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_zbb_rrr,
+    .out_rrr = tgen_umax,
+};
+
+static void tgen_umin(TCGContext *s, TCGType type,
+                      TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tcg_out_opc_reg(s, OPC_MINU, a0, a1, a2);
+}
+
+static const TCGOutOpBinary outop_umin = {
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_zbb_rrr,
+    .out_rrr = tgen_umin,
+};
+
 static void tgen_xor(TCGContext *s, TCGType type,
                      TCGReg a0, TCGReg a1, TCGReg a2)
 {
@@ -2467,6 +2528,30 @@ static const TCGOutOpUnary outop_bswap64 = {
     .base.static_constraint = C_Dynamic,
     .base.dynamic_constraint = cset_bswap,
     .out_rr = tgen_bswap64,
+};
+
+static TCGConstraintSetIndex cset_revbit8(TCGType type, unsigned flags)
+{
+    return cpuinfo & CPUINFO_ZBKB ? C_O1_I1(r, r) : C_NotImplemented;
+}
+
+static void tgen_revbit8(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)
+{
+    tcg_out_opc_imm(s, OPC_BREV8, a0, a1, 0);
+}
+
+static const TCGOutOpUnary outop_revbit8 = {
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_revbit8,
+    .out_rr = tgen_revbit8,
+};
+
+static const TCGOutOpBswap outop_revbit32 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpUnary outop_revbit64 = {
+    .base.static_constraint = C_NotImplemented,
 };
 
 static void tgen_neg(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)

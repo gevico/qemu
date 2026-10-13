@@ -29,6 +29,7 @@
 
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"
+#include "gdbstub/enums.h"
 #include "accel/accel-ops.h"
 #include "accel/accel-cpu-ops.h"
 #include "exec/cpu-common.h"
@@ -39,6 +40,8 @@
 #include "system/mshv.h"
 #include "system/mshv_int.h"
 #include "system/reset.h"
+#include "migration/qemu-file-types.h"
+#include "migration/register.h"
 #include "trace.h"
 #include <err.h>
 #include <sys/ioctl.h>
@@ -58,53 +61,29 @@ static int init_mshv(int *mshv_fd)
     return 0;
 }
 
-/* freeze 1 to pause, 0 to resume */
-static int set_time_freeze(int vm_fd, int freeze)
+static int mshv_load_cleanup(void *opaque)
 {
+    CPUState *cpu;
     int ret;
-    struct hv_input_set_partition_property in = {0};
-    in.property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
-    in.property_value = freeze;
 
-    struct mshv_root_hvcall args = {0};
-    args.code = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    ret = mshv_hvcall(vm_fd, &args);
+    ret = mshv_arch_set_partition_msrs(first_cpu);
     if (ret < 0) {
-        error_report("Failed to set time freeze");
+        error_report("Failed to set partition MSRs: %s", strerror(-ret));
         return -1;
+    }
+
+    CPU_FOREACH(cpu) {
+        ret = mshv_arch_set_mp_state(cpu);
+        if (ret < 0) {
+            error_report("Failed to set mp state for vCPU %d: %s",
+                         cpu->cpu_index, strerror(-ret));
+            return -1;
+        }
     }
 
     return 0;
 }
 
-static int pause_vm(int vm_fd)
-{
-    int ret;
-
-    ret = set_time_freeze(vm_fd, 1);
-    if (ret < 0) {
-        error_report("Failed to pause partition: %s", strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
-
-static int resume_vm(int vm_fd)
-{
-    int ret;
-
-    ret = set_time_freeze(vm_fd, 0);
-    if (ret < 0) {
-        error_report("Failed to resume partition: %s", strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
 
 static int get_host_partition_property(int mshv_fd, uint32_t property_code,
                                        uint64_t *value)
@@ -203,6 +182,14 @@ static int create_partition(int mshv_fd, int *vm_fd)
 
     /* enable all */
     disabled_xsave_features.as_uint64 = 0;
+    /*
+     * AMX TILE XSAVE state (XTILE_DATA) is 8KB, which exceeds the
+     * current fixed 4KB XSAVE buffer size.
+     */
+    disabled_xsave_features.amx_tile_support = 1;
+    disabled_xsave_features.amx_bf16_support = 1;
+    disabled_xsave_features.amx_int8_support = 1;
+    disabled_xsave_features.amx_fp16_support = 1;
 
     /*
      * query host for supported processor features and disable unsupported
@@ -319,9 +306,6 @@ static int create_vm(int mshv_fd, int *vm_fd)
     if (ret < 0) {
         return -1;
     }
-
-    /* Always create a frozen partition */
-    pause_vm(*vm_fd);
 
     return 0;
 }
@@ -536,6 +520,10 @@ static int mshv_init_vcpu(CPUState *cpu)
     return 0;
 }
 
+static SaveVMHandlers savevm_mshv = {
+    .load_cleanup = mshv_load_cleanup,
+};
+
 static int mshv_init(AccelState *as, MachineState *ms)
 {
     MshvState *s;
@@ -565,13 +553,6 @@ static int mshv_init(AccelState *as, MachineState *ms)
         return -1;
     }
 
-    ret = resume_vm(vm_fd);
-    if (ret < 0) {
-        close(mshv_fd);
-        close(vm_fd);
-        return -1;
-    }
-
     s->vm = vm_fd;
     s->fd = mshv_fd;
 
@@ -583,6 +564,10 @@ static int mshv_init(AccelState *as, MachineState *ms)
     s->nr_as = 1;
     s->as = g_new0(MshvAddressSpace, s->nr_as);
 
+    QTAILQ_INIT(&s->sw_breakpoints);
+
+    as->gdbstub.sstep_flags = SSTEP_ENABLE;
+
     mshv_state = s;
 
     mshv_init_irq_routing(s);
@@ -590,6 +575,10 @@ static int mshv_init(AccelState *as, MachineState *ms)
     register_mshv_memory_listener(s, &s->memory_listener, &address_space_memory,
                                   0, "mshv-memory");
     memory_listener_register(&mshv_io_listener, &address_space_io);
+
+    register_savevm_live("mshv", 0, 1, &savevm_mshv, s);
+
+    mshv_clock_init();
 
     return 0;
 }
@@ -605,6 +594,158 @@ static int mshv_destroy_vcpu(CPUState *cpu)
     mshv_arch_destroy_vcpu(cpu);
     g_clear_pointer(&cpu->accel, g_free);
     return 0;
+}
+
+struct MshvSwBreakpoint *mshv_find_sw_breakpoint(CPUState *cpu, vaddr pc)
+{
+    struct MshvSwBreakpoint *bp;
+
+    QTAILQ_FOREACH(bp, &mshv_state->sw_breakpoints, entry) {
+        if (bp->pc == pc) {
+            return bp;
+        }
+    }
+    return NULL;
+}
+
+static int mshv_install_exception_intercept(int vm_fd, uint16_t vector)
+{
+    struct hv_input_install_intercept in = {0};
+    struct mshv_root_hvcall args = {0};
+    int ret;
+
+    in.access_type = 1 << HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE;
+    in.intercept_type = HV_INTERCEPT_TYPE_EXCEPTION;
+    in.intercept_parameter.as_uint64 = vector;
+
+    args.code = HVCALL_INSTALL_INTERCEPT;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to install exception intercept for vector %u",
+                     vector);
+    }
+    return ret;
+}
+
+/*
+ * Install the #DB intercept. This is a permanent, partition-wide latch: it is
+ * installed once on the first debug use and stays for the lifetime of the VM.
+ */
+static int mshv_init_exception_intercept(void)
+{
+    int ret;
+
+    if (mshv_state->exception_intercepts_installed) {
+        return 0;
+    }
+
+    /* Only #DB is needed: gdb breakpoints are INT1 (0xf1) */
+    ret = mshv_install_exception_intercept(mshv_state->vm, 1); /* #DB */
+    if (ret < 0) {
+        return ret;
+    }
+
+    mshv_state->exception_intercepts_installed = true;
+    return 0;
+}
+
+static void mshv_update_guest_debug(CPUState *cpu)
+{
+    int ret;
+
+    if (cpu_single_stepping(cpu)) {
+        /* Installs exception intercept only on the first call */
+        ret = mshv_init_exception_intercept();
+        if (ret < 0) {
+            error_report("Failed to install exception intercept for #DB");
+            abort();
+        }
+    }
+}
+
+static int mshv_insert_gdbstub_breakpoint(CPUState *cpu, GdbBreakpointType type,
+                                          vaddr addr, vaddr len)
+{
+    struct MshvSwBreakpoint *bp;
+    int err;
+
+    /* We don't use the guest's debug registers. */
+    if (type != GDB_BREAKPOINT_SW) {
+        return -ENOSYS;
+    }
+
+    bp = mshv_find_sw_breakpoint(cpu, addr);
+    if (bp) {
+        bp->use_count++;
+        return 0;
+    }
+
+    bp = g_new(struct MshvSwBreakpoint, 1);
+    bp->pc = addr;
+    bp->use_count = 1;
+    err = mshv_arch_insert_sw_breakpoint(cpu, bp);
+    if (err) {
+        g_free(bp);
+        return err;
+    }
+
+    QTAILQ_INSERT_HEAD(&mshv_state->sw_breakpoints, bp, entry);
+
+    /* Installs exception intercept only on the first call */
+    return mshv_init_exception_intercept();
+}
+
+static int mshv_remove_gdbstub_breakpoint(CPUState *cpu, GdbBreakpointType type,
+                                          vaddr addr, vaddr len)
+{
+    struct MshvSwBreakpoint *bp;
+    int err;
+
+    if (type != GDB_BREAKPOINT_SW) {
+        return -ENOSYS;
+    }
+
+    bp = mshv_find_sw_breakpoint(cpu, addr);
+    if (!bp) {
+        return -ENOENT;
+    }
+
+    if (bp->use_count > 1) {
+        bp->use_count--;
+        return 0;
+    }
+
+    err = mshv_arch_remove_sw_breakpoint(cpu, bp);
+    if (err) {
+        return err;
+    }
+
+    QTAILQ_REMOVE(&mshv_state->sw_breakpoints, bp, entry);
+    g_free(bp);
+
+    return 0;
+}
+
+static void mshv_remove_all_gdbstub_breakpoints(CPUState *cpu)
+{
+    struct MshvSwBreakpoint *bp, *next;
+    CPUState *tmpcpu;
+
+    QTAILQ_FOREACH_SAFE(bp, &mshv_state->sw_breakpoints, entry, next) {
+        if (mshv_arch_remove_sw_breakpoint(cpu, bp) != 0) {
+            /* Fall back to whichever CPU still has it mapped. */
+            CPU_FOREACH(tmpcpu) {
+                if (mshv_arch_remove_sw_breakpoint(tmpcpu, bp) == 0) {
+                    break;
+                }
+            }
+        }
+        QTAILQ_REMOVE(&mshv_state->sw_breakpoints, bp, entry);
+        g_free(bp);
+    }
 }
 
 static int mshv_cpu_exec(CPUState *cpu)
@@ -628,6 +769,13 @@ static int mshv_cpu_exec(CPUState *cpu)
             cpu->vcpu_dirty = false;
         }
 
+        /* Corresponding store-release is in cpu_exit. */
+        if (qatomic_load_acquire(&cpu->exit_request)) {
+            trace_mshv_interrupt_exit_request(cpu->cpu_index);
+            ret = EXCP_INTERRUPT;
+            break;
+        }
+
         ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
         if (ret < 0) {
             error_report("Failed to run on vcpu %d", cpu->cpu_index);
@@ -636,6 +784,9 @@ static int mshv_cpu_exec(CPUState *cpu)
 
         switch (exit_reason) {
         case MshvVmExitIgnore:
+            break;
+        case MshvVmExitDebug:
+            ret = EXCP_DEBUG;
             break;
         default:
             ret = EXCP_INTERRUPT;
@@ -655,17 +806,13 @@ static int mshv_cpu_exec(CPUState *cpu)
 }
 
 /*
- * The signal handler is triggered when QEMU's main thread receives a SIG_IPI
- * (SIGUSR1). This signal causes the current CPU thread to be kicked, forcing a
- * VM exit on the CPU. The VM exit generates an exit reason that breaks the loop
- * (see mshv_cpu_exec). If the exit is due to a Ctrl+A+x command, the system
- * will shut down. For other cases, the system will continue running.
+ * We need a dummy handler to make SIG_IPI a deliverable signal. The kernel
+ * handler will be woken up by the caught signal and instruct the hypervisor
+ * to suspend execution (the concrete mechanism differs between schedulers)
+ * and return to userspace.
  */
-static void sa_ipi_handler(int sig)
+static void dummy_handler(int sig)
 {
-    /* TODO: call IOCTL to set_immediate_exit, once implemented. */
-
-    qemu_cpu_kick_self();
 }
 
 static void init_signal(CPUState *cpu)
@@ -675,7 +822,7 @@ static void init_signal(CPUState *cpu)
     sigset_t set;
 
     memset(&sigact, 0, sizeof(sigact));
-    sigact.sa_handler = sa_ipi_handler;
+    sigact.sa_handler = dummy_handler;
     sigaction(SIG_IPI, &sigact, NULL);
 
     pthread_sigmask(SIG_BLOCK, NULL, &set);
@@ -708,7 +855,10 @@ static void *mshv_vcpu_thread(void *arg)
     do {
         qemu_process_cpu_events(cpu);
         if (cpu_can_run(cpu)) {
-            mshv_cpu_exec(cpu);
+            ret = mshv_cpu_exec(cpu);
+            if (ret == EXCP_DEBUG) {
+                cpu_handle_guest_debug(cpu);
+            }
         }
     } while (!cpu->unplug || cpu_can_run(cpu));
 
@@ -851,7 +1001,13 @@ static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
     ops->synchronize_state = mshv_cpu_synchronize;
     ops->synchronize_pre_loadvm = mshv_cpu_synchronize_pre_loadvm;
     ops->cpus_are_resettable = mshv_cpus_are_resettable;
+    ops->cpu_thread_is_idle = mshv_vcpu_thread_is_idle;
     ops->handle_interrupt = generic_handle_interrupt;
+
+    ops->update_guest_debug = mshv_update_guest_debug;
+    ops->insert_gdbstub_breakpoint = mshv_insert_gdbstub_breakpoint;
+    ops->remove_gdbstub_breakpoint = mshv_remove_gdbstub_breakpoint;
+    ops->remove_all_gdbstub_breakpoints = mshv_remove_all_gdbstub_breakpoints;
 }
 
 static const TypeInfo mshv_accel_ops_type = {

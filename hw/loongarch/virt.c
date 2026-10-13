@@ -1167,7 +1167,7 @@ static CPUArchId *virt_find_empty_cpu_slot(MachineState *ms)
     return NULL;
 }
 
-static void virt_cpu_pre_plug(HotplugHandler *hotplug_dev,
+static void virt_cpu_pre_plug(const HotplugHandler *hotplug_dev,
                               DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
@@ -1229,7 +1229,7 @@ static void virt_cpu_pre_plug(HotplugHandler *hotplug_dev,
     numa_cpu_pre_plug(cpu_slot, dev, errp);
 }
 
-static void virt_cpu_unplug_request(HotplugHandler *hotplug_dev,
+static void virt_cpu_unplug_request(const HotplugHandler *hotplug_dev,
                                     DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
@@ -1246,7 +1246,7 @@ static void virt_cpu_unplug_request(HotplugHandler *hotplug_dev,
     hotplug_handler_unplug_request(HOTPLUG_HANDLER(lvms->acpi_ged), dev, errp);
 }
 
-static void virt_cpu_unplug(HotplugHandler *hotplug_dev,
+static void virt_cpu_unplug(const HotplugHandler *hotplug_dev,
                             DeviceState *dev, Error **errp)
 {
     CPUArchId *cpu_slot;
@@ -1268,7 +1268,7 @@ static void virt_cpu_unplug(HotplugHandler *hotplug_dev,
     cpu_slot->cpu = NULL;
 }
 
-static void virt_cpu_plug(HotplugHandler *hotplug_dev,
+static void virt_cpu_plug(const HotplugHandler *hotplug_dev,
                           DeviceState *dev, Error **errp)
 {
     CPUArchId *cpu_slot;
@@ -1304,14 +1304,14 @@ static bool memhp_type_supported(DeviceState *dev)
            !object_dynamic_cast(OBJECT(dev), TYPE_NVDIMM);
 }
 
-static void virt_mem_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
-                                 Error **errp)
+static void virt_mem_pre_plug(const HotplugHandler *hotplug_dev,
+                              DeviceState *dev, Error **errp)
 {
     pc_dimm_pre_plug(PC_DIMM(dev), MACHINE(hotplug_dev), errp);
 }
 
-static void virt_device_pre_plug(HotplugHandler *hotplug_dev,
-                                            DeviceState *dev, Error **errp)
+static void virt_device_pre_plug(const HotplugHandler *hotplug_dev,
+                                 DeviceState *dev, Error **errp)
 {
     if (memhp_type_supported(dev)) {
         virt_mem_pre_plug(hotplug_dev, dev, errp);
@@ -1320,8 +1320,8 @@ static void virt_device_pre_plug(HotplugHandler *hotplug_dev,
     }
 }
 
-static void virt_mem_unplug_request(HotplugHandler *hotplug_dev,
-                                     DeviceState *dev, Error **errp)
+static void virt_mem_unplug_request(const HotplugHandler *hotplug_dev,
+                                    DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1330,8 +1330,8 @@ static void virt_mem_unplug_request(HotplugHandler *hotplug_dev,
                                    errp);
 }
 
-static void virt_device_unplug_request(HotplugHandler *hotplug_dev,
-                                          DeviceState *dev, Error **errp)
+static void virt_device_unplug_request(const HotplugHandler *hotplug_dev,
+                                       DeviceState *dev, Error **errp)
 {
     if (memhp_type_supported(dev)) {
         virt_mem_unplug_request(hotplug_dev, dev, errp);
@@ -1340,8 +1340,8 @@ static void virt_device_unplug_request(HotplugHandler *hotplug_dev,
     }
 }
 
-static void virt_mem_unplug(HotplugHandler *hotplug_dev,
-                             DeviceState *dev, Error **errp)
+static void virt_mem_unplug(const HotplugHandler *hotplug_dev,
+                            DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1350,8 +1350,8 @@ static void virt_mem_unplug(HotplugHandler *hotplug_dev,
     qdev_unrealize(dev);
 }
 
-static void virt_device_unplug(HotplugHandler *hotplug_dev,
-                                          DeviceState *dev, Error **errp)
+static void virt_device_unplug(const HotplugHandler *hotplug_dev,
+                               DeviceState *dev, Error **errp)
 {
     if (memhp_type_supported(dev)) {
         virt_mem_unplug(hotplug_dev, dev, errp);
@@ -1360,8 +1360,8 @@ static void virt_device_unplug(HotplugHandler *hotplug_dev,
     }
 }
 
-static void virt_mem_plug(HotplugHandler *hotplug_dev,
-                             DeviceState *dev, Error **errp)
+static void virt_mem_plug(const HotplugHandler *hotplug_dev,
+                          DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
 
@@ -1370,8 +1370,8 @@ static void virt_mem_plug(HotplugHandler *hotplug_dev,
                          dev, &error_abort);
 }
 
-static void virt_device_plug_cb(HotplugHandler *hotplug_dev,
-                                        DeviceState *dev, Error **errp)
+static void virt_device_plug_cb(const HotplugHandler *hotplug_dev,
+                                DeviceState *dev, Error **errp)
 {
     LoongArchVirtMachineState *lvms = LOONGARCH_VIRT_MACHINE(hotplug_dev);
     MachineClass *mc = MACHINE_GET_CLASS(lvms);
@@ -1389,8 +1389,8 @@ static void virt_device_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static HotplugHandler *virt_get_hotplug_handler(MachineState *machine,
-                                                DeviceState *dev)
+static const HotplugHandler *virt_get_hotplug_handler(MachineState *machine,
+                                                      DeviceState *dev)
 {
     MachineClass *mc = MACHINE_GET_CLASS(machine);
 
@@ -1465,7 +1465,6 @@ static void virt_class_init(ObjectClass *oc, const void *data)
     mc->default_ram_id = "loongarch.ram";
     mc->desc = "QEMU LoongArch Virtual Machine";
     mc->max_cpus = LOONGARCH_MAX_CPUS;
-    mc->is_default = 1;
     mc->default_kernel_irqchip_split = false;
     mc->block_default_type = IF_VIRTIO;
     mc->default_boot_order = "c";
@@ -1546,6 +1545,7 @@ static void virt_class_init(ObjectClass *oc, const void *data)
         MACHINE_VER_DEPRECATION(__VA_ARGS__); \
         if (latest) { \
             mc->alias = "virt"; \
+            mc->is_default = true; \
         } \
     } \
     static const TypeInfo MACHINE_VER_SYM(info, virt, __VA_ARGS__) = \
@@ -1600,7 +1600,14 @@ static void machvirt_machine_init(void)
 
 type_init(machvirt_machine_init);
 
-static void virt_machine_11_1_options(MachineClass *mc)
+static void virt_machine_11_2_options(MachineClass *mc)
 {
 }
-DEFINE_VIRT_MACHINE_AS_LATEST(11, 1)
+DEFINE_VIRT_MACHINE_AS_LATEST(11, 2)
+
+static void virt_machine_11_1_options(MachineClass *mc)
+{
+    virt_machine_11_2_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_1, hw_compat_11_1_len);
+}
+DEFINE_VIRT_MACHINE(11, 1)

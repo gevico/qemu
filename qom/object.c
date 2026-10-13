@@ -23,6 +23,7 @@
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/forward-visitor.h"
 #include "qapi/qapi-builtin-visit.h"
+#include "qapi/compat-policy.h"
 #include "qobject/qdict.h"
 #include "qobject/qjson.h"
 #include "qemu/id.h"
@@ -34,6 +35,7 @@
 #include "qom/qom-qobject.h"
 #include "qobject/qbool.h"
 #include "qobject/qlist.h"
+#include "qobject/qnull.h"
 #include "qobject/qnum.h"
 #include "qobject/qstring.h"
 #include "qemu/error-report.h"
@@ -67,6 +69,7 @@ struct TypeImpl
     void (*instance_finalize)(Object *obj);
 
     bool abstract;
+    bool secure;
 
     const char *parent;
     TypeImpl *parent_type;
@@ -122,6 +125,7 @@ static TypeImpl *type_new(const TypeInfo *info)
     ti->instance_finalize = info->instance_finalize;
 
     ti->abstract = info->abstract;
+    ti->secure = info->secure;
 
     for (i = 0; info->interfaces && info->interfaces[i].type; i++) {
         ti->interfaces[i].typename = g_strdup(info->interfaces[i].type);
@@ -161,6 +165,10 @@ static TypeImpl *type_register_internal(const TypeInfo *info)
     if (!type_name_is_valid(info->name)) {
         fprintf(stderr, "Registering '%s' with illegal type name\n", info->name);
         abort();
+    }
+
+    if (info->is_available && !info->is_available()) {
+        return NULL;
     }
 
     ti = type_new(info);
@@ -1140,6 +1148,11 @@ bool object_class_is_abstract(ObjectClass *klass)
     return klass->type->abstract;
 }
 
+bool object_class_is_secure(ObjectClass *klass)
+{
+    return klass->type->secure;
+}
+
 const char *object_class_get_name(ObjectClass *klass)
 {
     return klass->type->name;
@@ -1398,9 +1411,10 @@ object_class_property_add(ObjectClass *klass,
                           ObjectPropertyRelease *release,
                           void *opaque)
 {
+    bool prop_already_exists = object_class_property_find(klass, name);
     ObjectProperty *prop;
 
-    assert(!object_class_property_find(klass, name));
+    assert(!prop_already_exists);
 
     prop = g_malloc0(sizeof(*prop));
 
@@ -2661,84 +2675,137 @@ static char *object_get_type(Object *obj, Error **errp)
     return g_strdup(object_get_typename(obj));
 }
 
-static void property_get_uint8_ptr(Object *obj, Visitor *v, const char *name,
-                                   void *opaque, Error **errp)
+
+#define OBJECT_PROPERTY_SCALAR_GETTER(type) \
+    static void property_get_##type##_ptr(Object *obj, Visitor *v, \
+                                          const char *name, \
+                                          void *opaque, Error **errp) \
+    { \
+        type##_t value = *(type##_t *)opaque; \
+        visit_type_##type(v, name, &value, errp); \
+    }
+
+
+#define OBJECT_PROPERTY_SCALAR_SETTER(type) \
+    static void property_set_##type##_ptr(Object *obj, Visitor *v, \
+                                          const char *name, \
+                                          void *opaque, Error **errp) \
+    { \
+        type##_t *field = opaque; \
+        type##_t value; \
+        \
+        if (!visit_type_##type(v, name, &value, errp)) { \
+            return; \
+        } \
+        \
+        *field = value; \
+    }
+
+
+#define DEFINE_OBJECT_PROPERTY_SCALAR_METHODS(type) \
+    OBJECT_PROPERTY_SCALAR_GETTER(type) \
+    OBJECT_PROPERTY_SCALAR_SETTER(type)
+
+
+DEFINE_OBJECT_PROPERTY_SCALAR_METHODS(uint8)
+DEFINE_OBJECT_PROPERTY_SCALAR_METHODS(uint16)
+DEFINE_OBJECT_PROPERTY_SCALAR_METHODS(uint32)
+DEFINE_OBJECT_PROPERTY_SCALAR_METHODS(uint64)
+
+#undef OBJECT_PROPERTY_SCALAR_GETTER
+#undef OBJECT_PROPERTY_SCALAR_SETTER
+#undef DEFINE_OBJECT_PROPERTY_SCALAR_METHODS
+
+
+static void *object_class_prop_ptr(Object *obj, ptrdiff_t offset)
 {
-    uint8_t value = *(uint8_t *)opaque;
-    visit_type_uint8(v, name, &value, errp);
+    void *ptr = obj;
+    ptr += offset;
+
+    return ptr;
 }
 
-static void property_set_uint8_ptr(Object *obj, Visitor *v, const char *name,
-                                   void *opaque, Error **errp)
-{
-    uint8_t *field = opaque;
-    uint8_t value;
+#define OBJECT_CLASS_PROPERTY_SCALAR_GETTER(type) \
+    static void property_class_get_##type##_ptr(Object *obj, Visitor *v, \
+                                                const char *name, \
+                                                void *opaque, Error **errp) \
+    { \
+        type##_t value = *(type##_t *)object_class_prop_ptr(obj, \
+                                                        (ptrdiff_t)opaque); \
+        visit_type_##type(v, name, &value, errp); \
+    }
 
-    if (!visit_type_uint8(v, name, &value, errp)) {
+#define OBJECT_CLASS_PROPERTY_SCALAR_SETTER(type) \
+    static void property_class_set_##type##_ptr(Object *obj, Visitor *v, \
+                                                const char *name, \
+                                                void *opaque, Error **errp) \
+    { \
+        type##_t *field = (type##_t *)object_class_prop_ptr(obj, \
+                                                        (ptrdiff_t)opaque); \
+        type##_t value; \
+        \
+        if (!visit_type_##type(v, name, &value, errp)) { \
+            return; \
+        } \
+        \
+        *field = value; \
+    }
+
+#define DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS(type) \
+    OBJECT_CLASS_PROPERTY_SCALAR_GETTER(type) \
+    OBJECT_CLASS_PROPERTY_SCALAR_SETTER(type)
+
+DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS(uint8)
+DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS(uint16)
+DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS(uint32)
+DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS(uint64)
+
+#undef OBJECT_CLASS_PROPERTY_SCALAR_GETTER
+#undef OBJECT_CLASS_PROPERTY_SCALAR_SETTER
+#undef DEFINE_OBJECT_CLASS_PROPERTY_SCALAR_METHODS
+
+
+static void property_class_get_bool_ptr(Object *obj, Visitor *v,
+                                        const char *name,
+                                        void *opaque, Error **errp)
+{
+    bool value = *(bool *)object_class_prop_ptr(obj, (ptrdiff_t)opaque);
+
+    visit_type_bool(v, name, &value, errp);
+}
+
+static void property_class_set_bool_ptr(Object *obj, Visitor *v,
+                                        const char *name,
+                                        void *opaque, Error **errp)
+{
+    bool *field = (bool *)object_class_prop_ptr(obj, (ptrdiff_t)opaque);
+    bool value;
+
+    if (!visit_type_bool(v, name, &value, errp)) {
         return;
     }
 
     *field = value;
 }
 
-static void property_get_uint16_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
+ObjectProperty *
+object_class_property_add_bool_ptr(ObjectClass *klass, const char *name,
+                                   ptrdiff_t offset,
+                                   ObjectPropertyFlags flags)
 {
-    uint16_t value = *(uint16_t *)opaque;
-    visit_type_uint16(v, name, &value, errp);
-}
+    ObjectPropertyAccessor *getter = NULL;
+    ObjectPropertyAccessor *setter = NULL;
 
-static void property_set_uint16_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    uint16_t *field = opaque;
-    uint16_t value;
-
-    if (!visit_type_uint16(v, name, &value, errp)) {
-        return;
+    if ((flags & OBJ_PROP_FLAG_READ) == OBJ_PROP_FLAG_READ) {
+        getter = property_class_get_bool_ptr;
     }
 
-    *field = value;
-}
-
-static void property_get_uint32_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    uint32_t value = *(uint32_t *)opaque;
-    visit_type_uint32(v, name, &value, errp);
-}
-
-static void property_set_uint32_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    uint32_t *field = opaque;
-    uint32_t value;
-
-    if (!visit_type_uint32(v, name, &value, errp)) {
-        return;
+    if ((flags & OBJ_PROP_FLAG_WRITE) == OBJ_PROP_FLAG_WRITE) {
+        setter = property_class_set_bool_ptr;
     }
 
-    *field = value;
-}
-
-static void property_get_uint64_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    uint64_t value = *(uint64_t *)opaque;
-    visit_type_uint64(v, name, &value, errp);
-}
-
-static void property_set_uint64_ptr(Object *obj, Visitor *v, const char *name,
-                                    void *opaque, Error **errp)
-{
-    uint64_t *field = opaque;
-    uint64_t value;
-
-    if (!visit_type_uint64(v, name, &value, errp)) {
-        return;
-    }
-
-    *field = value;
+    return object_class_property_add(klass, name, "bool",
+                                     getter, setter, NULL, (void *)offset);
 }
 
 ObjectProperty *
@@ -2763,8 +2830,29 @@ object_property_add_uint8_ptr(Object *obj, const char *name,
 
 ObjectProperty *
 object_class_property_add_uint8_ptr(ObjectClass *klass, const char *name,
-                                    const uint8_t *v,
+                                    ptrdiff_t offset,
                                     ObjectPropertyFlags flags)
+{
+    ObjectPropertyAccessor *getter = NULL;
+    ObjectPropertyAccessor *setter = NULL;
+
+    if ((flags & OBJ_PROP_FLAG_READ) == OBJ_PROP_FLAG_READ) {
+        getter = property_class_get_uint8_ptr;
+    }
+
+    if ((flags & OBJ_PROP_FLAG_WRITE) == OBJ_PROP_FLAG_WRITE) {
+        setter = property_class_set_uint8_ptr;
+    }
+
+    return object_class_property_add(klass, name, "uint8",
+                                     getter, setter, NULL, (void *)offset);
+}
+
+ObjectProperty *
+object_class_static_property_add_uint8_ptr(ObjectClass *klass,
+                                           const char *name,
+                                           const uint8_t *v,
+                                           ObjectPropertyFlags flags)
 {
     ObjectPropertyAccessor *getter = NULL;
     ObjectPropertyAccessor *setter = NULL;
@@ -2803,8 +2891,29 @@ object_property_add_uint16_ptr(Object *obj, const char *name,
 
 ObjectProperty *
 object_class_property_add_uint16_ptr(ObjectClass *klass, const char *name,
-                                     const uint16_t *v,
+                                     ptrdiff_t offset,
                                      ObjectPropertyFlags flags)
+{
+    ObjectPropertyAccessor *getter = NULL;
+    ObjectPropertyAccessor *setter = NULL;
+
+    if ((flags & OBJ_PROP_FLAG_READ) == OBJ_PROP_FLAG_READ) {
+        getter = property_class_get_uint16_ptr;
+    }
+
+    if ((flags & OBJ_PROP_FLAG_WRITE) == OBJ_PROP_FLAG_WRITE) {
+        setter = property_class_set_uint16_ptr;
+    }
+
+    return object_class_property_add(klass, name, "uint16",
+                                     getter, setter, NULL, (void *)offset);
+}
+
+ObjectProperty *
+object_class_static_property_add_uint16_ptr(ObjectClass *klass,
+                                            const char *name,
+                                            const uint16_t *v,
+                                            ObjectPropertyFlags flags)
 {
     ObjectPropertyAccessor *getter = NULL;
     ObjectPropertyAccessor *setter = NULL;
@@ -2843,8 +2952,29 @@ object_property_add_uint32_ptr(Object *obj, const char *name,
 
 ObjectProperty *
 object_class_property_add_uint32_ptr(ObjectClass *klass, const char *name,
-                                     const uint32_t *v,
+                                     ptrdiff_t offset,
                                      ObjectPropertyFlags flags)
+{
+    ObjectPropertyAccessor *getter = NULL;
+    ObjectPropertyAccessor *setter = NULL;
+
+    if ((flags & OBJ_PROP_FLAG_READ) == OBJ_PROP_FLAG_READ) {
+        getter = property_class_get_uint32_ptr;
+    }
+
+    if ((flags & OBJ_PROP_FLAG_WRITE) == OBJ_PROP_FLAG_WRITE) {
+        setter = property_class_set_uint32_ptr;
+    }
+
+    return object_class_property_add(klass, name, "uint32",
+                                     getter, setter, NULL, (void *)offset);
+}
+
+ObjectProperty *
+object_class_static_property_add_uint32_ptr(ObjectClass *klass,
+                                            const char *name,
+                                            const uint32_t *v,
+                                            ObjectPropertyFlags flags)
 {
     ObjectPropertyAccessor *getter = NULL;
     ObjectPropertyAccessor *setter = NULL;
@@ -2883,8 +3013,29 @@ object_property_add_uint64_ptr(Object *obj, const char *name,
 
 ObjectProperty *
 object_class_property_add_uint64_ptr(ObjectClass *klass, const char *name,
-                                     const uint64_t *v,
+                                     ptrdiff_t offset,
                                      ObjectPropertyFlags flags)
+{
+    ObjectPropertyAccessor *getter = NULL;
+    ObjectPropertyAccessor *setter = NULL;
+
+    if ((flags & OBJ_PROP_FLAG_READ) == OBJ_PROP_FLAG_READ) {
+        getter = property_class_get_uint64_ptr;
+    }
+
+    if ((flags & OBJ_PROP_FLAG_WRITE) == OBJ_PROP_FLAG_WRITE) {
+        setter = property_class_set_uint64_ptr;
+    }
+
+    return object_class_property_add(klass, name, "uint64",
+                                     getter, setter, NULL, (void *)offset);
+}
+
+ObjectProperty *
+object_class_static_property_add_uint64_ptr(ObjectClass *klass,
+                                            const char *name,
+                                            const uint64_t *v,
+                                            ObjectPropertyFlags flags)
 {
     ObjectPropertyAccessor *getter = NULL;
     ObjectPropertyAccessor *setter = NULL;
@@ -2902,44 +3053,92 @@ object_class_property_add_uint64_ptr(ObjectClass *klass, const char *name,
 }
 
 typedef struct {
-    Object *target_obj;
+    union {
+        Object *target_obj; /* if !OBJ_PROP_ALIAS_CLASS */
+        ptrdiff_t offset;   /* if OBJ_PROP_ALIAS_CLASS */
+    };
     char *target_name;
+    ObjectPropertyAliasFlags flags;
 } AliasProperty;
+
+static Object **
+object_alias_get_targetp(Object *obj, AliasProperty *aprop)
+{
+    if (aprop->flags & OBJ_PROP_ALIAS_CLASS) {
+        return (void *)obj + aprop->offset;
+    } else {
+        return &aprop->target_obj;
+    }
+}
 
 static void property_get_alias(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
 {
     AliasProperty *prop = opaque;
-    Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
+    Object **target_obj = object_alias_get_targetp(obj, prop);
 
-    object_property_get(prop->target_obj, prop->target_name, alias_v, errp);
-    visit_free(alias_v);
+    if (*target_obj) {
+        Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
+
+        object_property_get(*target_obj, prop->target_name, alias_v, errp);
+        visit_free(alias_v);
+    } else {
+        QNull *null = NULL;
+
+        visit_type_null(v, NULL, &null, errp);
+        qnull_unref(null);
+    }
 }
 
 static void property_set_alias(Object *obj, Visitor *v, const char *name,
                                void *opaque, Error **errp)
 {
     AliasProperty *prop = opaque;
-    Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
+    Object **target_obj = object_alias_get_targetp(obj, prop);
 
-    object_property_set(prop->target_obj, prop->target_name, alias_v, errp);
-    visit_free(alias_v);
+    if (*target_obj) {
+        Visitor *alias_v = visitor_forward_field(v, prop->target_name, name);
+
+        object_property_set(*target_obj, prop->target_name, alias_v, errp);
+        visit_free(alias_v);
+    } else {
+        error_setg(errp, "unable to resolve alias property target");
+    }
 }
 
 static Object *property_resolve_alias(Object *obj, void *opaque,
                                       const char *part)
 {
     AliasProperty *prop = opaque;
+    Object **target_obj = object_alias_get_targetp(obj, prop);
 
-    return object_resolve_path_component(prop->target_obj, prop->target_name);
+    if (*target_obj) {
+        return object_resolve_path_component(*target_obj, prop->target_name);
+    } else {
+        return NULL;
+    }
 }
 
 static void property_release_alias(Object *obj, const char *name, void *opaque)
 {
     AliasProperty *prop = opaque;
 
-    g_free(prop->target_name);
-    g_free(prop);
+    if (!(prop->flags & OBJ_PROP_ALIAS_CLASS)) {
+        g_free(prop->target_name);
+        g_free(prop);
+    } else {
+        Object **target_obj = object_alias_get_targetp(obj, prop);
+
+        if (*target_obj) {
+            ObjectProperty *target_prop = object_property_find_err(*target_obj,
+                                                           prop->target_name,
+                                                           &error_abort);
+            if (*target_obj != obj &&
+                !object_property_is_child(target_prop)) {
+                    object_unref(*target_obj);
+            }
+        }
+    }
 }
 
 ObjectProperty *
@@ -2964,6 +3163,7 @@ object_property_add_alias(Object *obj, const char *name,
     prop = g_malloc(sizeof(*prop));
     prop->target_obj = target_obj;
     prop->target_name = g_strdup(target_name);
+    prop->flags = 0;
 
     op = object_property_add(obj, name, prop_type,
                              property_get_alias,
@@ -2978,6 +3178,79 @@ object_property_add_alias(Object *obj, const char *name,
     object_property_set_description(obj, op->name,
                                     target_prop->description);
     return op;
+}
+
+ObjectProperty *
+object_class_property_add_alias(ObjectClass *klass, const char *name,
+                                ptrdiff_t offset,
+                                const char *target_type,
+                                const char *target_name)
+{
+    AliasProperty *prop;
+    ObjectProperty *op;
+    ObjectProperty *target_prop;
+    ObjectClass *target_class;
+    g_autofree char *prop_type = NULL;
+
+    target_class = object_class_by_name(target_type);
+    assert(target_class);
+    target_prop = object_class_property_find(target_class, target_name);
+    assert(target_prop);
+
+    if (object_property_is_child(target_prop)) {
+        prop_type = g_strdup_printf("link%s",
+                                    target_prop->type + strlen("child"));
+    } else {
+        prop_type = g_strdup(target_prop->type);
+    }
+
+    prop = g_malloc(sizeof(*prop));
+    prop->offset = offset;
+    prop->target_name = g_strdup(target_name);
+    prop->flags = OBJ_PROP_ALIAS_CLASS;
+
+    op = object_class_property_add(klass, name, prop_type,
+                                   property_get_alias,
+                                   property_set_alias,
+                                   property_release_alias,
+                                   prop);
+    op->resolve = property_resolve_alias;
+    if (target_prop->defval) {
+        op->defval = qobject_ref(target_prop->defval);
+    }
+
+    object_class_property_set_description(klass, op->name,
+                                          target_prop->description);
+    return op;
+}
+
+void object_property_set_alias(Object *obj, const char *name,
+                               Object *target_obj)
+{
+    AliasProperty *prop;
+    ObjectProperty *op, *target_prop;
+    Object **target_objp;
+
+    op = object_property_find_err(obj, name, &error_abort);
+    prop = op->opaque;
+    assert(prop->flags & OBJ_PROP_ALIAS_CLASS);
+
+    target_objp = object_alias_get_targetp(obj, prop);
+    if (*target_objp) {
+        target_prop = object_property_find_err(*target_objp, prop->target_name,
+                                               &error_abort);
+        if (*target_objp != obj && !object_property_is_child(target_prop)) {
+            object_unref(*target_objp);
+        }
+    }
+    *target_objp = target_obj;
+    if (*target_objp) {
+        target_prop = object_property_find_err(*target_objp, prop->target_name,
+                                               &error_abort);
+        if (*target_objp != obj && !object_property_is_child(target_prop)) {
+            object_ref(*target_objp);
+        }
+    }
 }
 
 void object_property_set_description(Object *obj, const char *name,
@@ -2999,6 +3272,14 @@ void object_class_property_set_description(ObjectClass *klass,
     op = g_hash_table_lookup(klass->properties, name);
     g_free(op->description);
     op->description = g_strdup(description);
+}
+
+bool object_class_check_security(ObjectClass *klass, Error **errp)
+{
+    return compat_policy_check_security(&compat_policy,
+                                        object_class_get_name(klass),
+                                        object_class_is_secure(klass),
+                                        errp);
 }
 
 static void object_class_init(ObjectClass *klass, const void *data)

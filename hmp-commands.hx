@@ -299,10 +299,9 @@ ERST
 
     {
         .name       = "trace-event",
-        .args_type  = "name:s,option:b,vcpu:i?",
-        .params     = "name on|off [vcpu]",
-        .help       = "changes status of a specific trace event "
-                      "(vcpu: vCPU to set, default is all)",
+        .args_type  = "name:s,option:b",
+        .params     = "name on|off",
+        .help       = "changes status of a specific trace event",
         .cmd = hmp_trace_event,
         .command_completion = trace_event_completion,
     },
@@ -865,12 +864,13 @@ ERST
         .name       = "nmi",
         .args_type  = "",
         .params     = "",
-        .help       = "inject an NMI",
+        .help       = "Inject an NMI, in a machine-specific way",
         .cmd        = hmp_nmi,
     },
 SRST
-``nmi`` *cpu*
-  Inject an NMI on the default CPU (x86/s390) or all CPUs (ppc64).
+``nmi``
+  Inject an NMI, in a machine-specific way.
+  Not all machines implement NMI handling.
 ERST
 
     {
@@ -928,16 +928,17 @@ ERST
 
     {
         .name       = "migrate",
-        .args_type  = "detach:-d,resume:-r,uri:s",
-        .params     = "[-d] [-r] uri",
+        .args_type  = "detach:-d,resume:-r,uri-cpr:-cs,uri:s",
+        .params     = "[-d] [-r] [-c uri-cpr] uri",
         .help       = "migrate to URI (using -d to not wait for completion)"
-		      "\n\t\t\t -r to resume a paused postcopy migration",
+		      "\n\t\t\t -r to resume a paused postcopy migration"
+		      "\n\t\t\t -c to specify a CPR URI for cpr-transfer mode",
         .cmd        = hmp_migrate,
     },
 
 
 SRST
-``migrate [-d] [-r]`` *uri*
+``migrate [-d] [-r] [-c uri-cpr]`` *uri*
   Migrate the VM to *uri*.
 
   ``-d``
@@ -945,6 +946,9 @@ SRST
     query an ongoing migration process, use "info migrate".
   ``-r``
     Resume a paused postcopy migration.
+  ``-c`` *uri-cpr*
+    Specify the CPR URI for cpr-transfer mode. It must be a UNIX domain
+    socket.
 ERST
 
     {
@@ -1169,7 +1173,7 @@ ERST
 
     {
         .name       = "snapshot_blkdev",
-        .args_type  = "reuse:-n,device:B,snapshot-file:s?,format:s?",
+        .args_type  = "reuse:-n,device:B,snapshot-file:s,format:s?",
         .params     = "[-n] device [new-image-file] [format]",
         .help       = "initiates a live snapshot\n\t\t\t"
                       "of device. If a new image file is specified, the\n\t\t\t"

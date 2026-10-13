@@ -274,6 +274,7 @@ static bool tcg_target_const_match(int64_t val, int ct,
 #define OPC_MOVSLQ	(0x63 | P_REXW)
 #define OPC_MOVZBL	(0xb6 | P_EXT)
 #define OPC_MOVZWL	(0xb7 | P_EXT)
+#define OPC_MULX        (0xf6 | P_SIMDF2 | P_EXT38)
 #define OPC_PABSB       (0x1c | P_EXT38 | P_DATA16)
 #define OPC_PABSW       (0x1d | P_EXT38 | P_DATA16)
 #define OPC_PABSD       (0x1e | P_EXT38 | P_DATA16)
@@ -1289,6 +1290,18 @@ static inline void tcg_out_bswap64(TCGContext *s, int reg)
 {
     tcg_out_opc(s, OPC_BSWAP + P_REXW + LOWREGMASK(reg), 0, reg, 0);
 }
+
+static const TCGOutOpUnary outop_revbit8 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBswap outop_revbit32 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpUnary outop_revbit64 = {
+    .base.static_constraint = C_NotImplemented,
+};
 
 static void tgen_arithi(TCGContext *s, int c, int r0,
                         tcg_target_long val, int cf)
@@ -2720,19 +2733,48 @@ static const TCGOutOpBinary outop_mulsh = {
     .base.static_constraint = C_NotImplemented,
 };
 
+static void tgen_muluh(TCGContext *s, TCGType type,
+                       TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    /*
+     * Note from the architecture manual:
+     * If the first and second operand are identical,
+     * it will contain the high half of the multiplication result.
+     */
+    int rexw = type == TCG_TYPE_I32 ? 0 : P_REXW;
+    tcg_out_vex_modrm(s, OPC_MULX + rexw, a0, a0, a1);
+}
+
+static TCGConstraintSetIndex cset_muluh(TCGType type, unsigned flags)
+{
+    return have_bmi2 ? C_O1_I2(r, r, d) : C_NotImplemented;
+}
+
 static const TCGOutOpBinary outop_muluh = {
-    .base.static_constraint = C_NotImplemented,
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_muluh,
+    .out_rrr = tgen_muluh,
 };
 
 static void tgen_mulu2(TCGContext *s, TCGType type,
                        TCGReg a0, TCGReg a1, TCGReg a2, TCGReg a3)
 {
     int rexw = type == TCG_TYPE_I32 ? 0 : P_REXW;
-    tcg_out_modrm(s, OPC_GRP3_Ev + rexw, EXT3_MUL, a3);
+    if (have_bmi2) {
+        tcg_out_vex_modrm(s, OPC_MULX + rexw, a1, a0, a2);
+    } else {
+        tcg_out_modrm(s, OPC_GRP3_Ev + rexw, EXT3_MUL, a3);
+    }
+}
+
+static TCGConstraintSetIndex cset_mulu2(TCGType type, unsigned flags)
+{
+    return have_bmi2 ? C_O2_I2(r, r, r, d) : C_O2_I2(a, d, a, r);
 }
 
 static const TCGOutOpMul2 outop_mulu2 = {
-    .base.static_constraint = C_O2_I2(a, d, a, r),
+    .base.static_constraint = C_Dynamic,
+    .base.dynamic_constraint = cset_mulu2,
     .out_rrrr = tgen_mulu2,
 };
 
@@ -2964,6 +3006,22 @@ static void tcg_out_set_borrow(TCGContext *s)
 {
     tcg_out8(s, OPC_STC);
 }
+
+static const TCGOutOpBinary outop_smax = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_smin = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_umax = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_umin = {
+    .base.static_constraint = C_NotImplemented,
+};
 
 static void tgen_xor(TCGContext *s, TCGType type,
                      TCGReg a0, TCGReg a1, TCGReg a2)

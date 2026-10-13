@@ -12,7 +12,6 @@
 #include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "hw/arm/boot.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/net/smc91c111.h"
 #include "net/net.h"
 #include "system/system.h"
@@ -182,10 +181,16 @@ static void vpb_sic_init(Object *obj)
    peripherals and expansion busses.  For now we emulate a subset of the
    PB peripherals and just change the board ID.  */
 
-static struct arm_boot_info versatile_binfo;
+typedef struct VersatileMachineState {
+    MachineState parent;
+
+    struct arm_boot_info bootinfo;
+} VersatileMachineState;
 
 static void versatile_init(MachineState *machine, int board_id)
 {
+    /* versatilepb and versatileab embed the same state as first member */
+    VersatileMachineState *vms = (VersatileMachineState *)machine;
     Object *cpuobj;
     ARMCPU *cpu;
     MemoryRegion *sysmem = get_system_memory();
@@ -397,9 +402,9 @@ static void versatile_init(MachineState *machine, int board_id)
                           VERSATILE_FLASH_SECT_SIZE,
                           4, 0x0089, 0x0018, 0x0000, 0x0, 0);
 
-    versatile_binfo.ram_size = machine->ram_size;
-    versatile_binfo.board_id = board_id;
-    arm_load_kernel(cpu, machine, &versatile_binfo);
+    vms->bootinfo.ram_size = machine->ram_size;
+    vms->bootinfo.board_id = board_id;
+    arm_load_kernel(cpu, machine, &vms->bootinfo);
 }
 
 static void vpb_init(MachineState *machine)
@@ -431,7 +436,7 @@ static const TypeInfo versatilepb_type = {
     .name = MACHINE_TYPE_NAME("versatilepb"),
     .parent = TYPE_MACHINE,
     .class_init = versatilepb_class_init,
-    .interfaces = arm_machine_interfaces,
+    .instance_size = sizeof(VersatileMachineState),
 };
 
 static void versatileab_class_init(ObjectClass *oc, const void *data)
@@ -453,7 +458,7 @@ static const TypeInfo versatileab_type = {
     .name = MACHINE_TYPE_NAME("versatileab"),
     .parent = TYPE_MACHINE,
     .class_init = versatileab_class_init,
-    .interfaces = arm_machine_interfaces,
+    .instance_size = sizeof(VersatileMachineState),
 };
 
 static void versatile_machine_init(void)

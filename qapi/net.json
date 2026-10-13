@@ -12,8 +12,7 @@
 
 ##
 # @set_link:
-#
-# Sets the link status of a virtual network adapter.
+#     Sets the link status of a virtual network adapter.
 #
 # @name: the device name of the virtual network adapter
 #
@@ -38,8 +37,7 @@
 
 ##
 # @netdev_add:
-#
-# Add a network backend.
+#     Add a network backend.
 #
 # Additional arguments depend on the type.
 #
@@ -60,8 +58,7 @@
 
 ##
 # @netdev_del:
-#
-# Remove a network backend.
+#     Remove a network backend.
 #
 # @id: the name of the network backend to remove
 #
@@ -80,8 +77,7 @@
 
 ##
 # @NetLegacyNicOptions:
-#
-# Create a new Network Interface Card.
+#     Create a new Network Interface Card.
 #
 # @netdev: id of -netdev to connect to
 #
@@ -140,8 +136,7 @@
 
 ##
 # @NetdevPasstOptions:
-#
-# Unprivileged user-mode network connectivity using passt
+#     Unprivileged user-mode network connectivity using passt
 #
 # @path: Filename of the passt program to run (by default 'passt', and
 #     use PATH)
@@ -301,9 +296,8 @@
 
 ##
 # @NetdevUserOptions:
-#
-# Use the user mode network stack which requires no administrator
-# privilege to run.
+#     Use the user mode network stack which requires no administrator
+#     privilege to run.
 #
 # @hostname: client hostname reported by the builtin DHCP server
 #
@@ -389,8 +383,7 @@
 
 ##
 # @NetdevTapOptions:
-#
-# Used to configure a host TAP network interface backend.
+#     Used to configure a host TAP network interface backend.
 #
 # @ifname: interface name
 #
@@ -399,9 +392,21 @@
 # @fds: multiple file descriptors of already opened multiqueue capable
 #     tap
 #
-# @script: script to initialize the interface
+# @script: script to initialize the interface.  An empty string
+#     disables script execution.  Defaults to
+#     ``<sysconfdir>/qemu-ifup``, where ``<sysconfdir>`` is the
+#     system configuration directory at build time (typically /etc).
+#     Using "no" to disable script execution is deprecated (since
+#     11.2); use an empty string instead.  In a future version, "no"
+#     will be treated as a plain file name.
 #
-# @downscript: script to shut down the interface
+# @downscript: script to shut down the interface.  An empty string
+#     disables script execution.  Defaults to
+#     ``<sysconfdir>/qemu-ifdown``, where ``<sysconfdir>`` is the
+#     system configuration directory at build time (typically /etc).
+#     Using "no" to disable script execution is deprecated (since
+#     11.2); use an empty string instead.  In a future version, "no"
+#     will be treated as a plain file name.
 #
 # @br: bridge name (since 2.8)
 #
@@ -425,6 +430,31 @@
 # @poll-us: maximum number of microseconds that could be spent on busy
 #     polling for tap (since 2.7)
 #
+# @x-permit-local-migration: permit local migration for this TAP
+#     backend.  When set, local migration is enabled/disabled by
+#     migration parameter @local for this TAP backend.  When unset,
+#     migration parameter @local is ignored for this TAP backend.
+#
+#     To be able to do incoming local migration of a TAP backend,
+#     migration parameter @local must be set _before_ creating the
+#     TAP backend.  Otherwise, TAP backend is initialized as usual,
+#     opening/creating TAP devices in kernel.  In this case further
+#     local incoming migration (with migration parameter @local set
+#     after creating TAP backend with @x-permit-local-migration
+#     parameter set) will simply fail.
+#
+#     Moreover, when QEMU is in incoming migration state, migration
+#     parameter @local is set and @x-permit-local-migration is set,
+#     the following options are not supported and must not be set:
+#     @fd, @fds, @helper, @br, @ifname, @sndbuf, @vnet_hdr.
+#     Additionally, @script and @downscript must be explicitly
+#     disabled then.
+#     (default: false, since 11.2)
+#
+# Features:
+#
+# @unstable: Member @x-permit-local-migration is experimental.
+#
 # Since: 1.2
 ##
 { 'struct': 'NetdevTapOptions',
@@ -443,13 +473,14 @@
     '*vhostfds':   'str',
     '*vhostforce': 'bool',
     '*queues':     'uint32',
-    '*poll-us':    'uint32'} }
+    '*poll-us':    'uint32',
+    '*x-permit-local-migration': {
+      'type': 'bool', 'features' : [ 'unstable'] } } }
 
 ##
 # @NetdevSocketOptions:
-#
-# Socket netdevs are used to establish a network connection to another
-# QEMU virtual machine via a TCP socket.
+#     Socket netdevs are used to establish a network connection to
+#     another QEMU virtual machine via a TCP socket.
 #
 # @fd: file descriptor of an already opened socket
 #
@@ -476,8 +507,7 @@
 
 ##
 # @NetdevL2TPv3Options:
-#
-# Configure an Ethernet over L2TPv3 tunnel.
+#     Configure an Ethernet over L2TPv3 tunnel.
 #
 # @src: source address
 #
@@ -531,8 +561,7 @@
 
 ##
 # @NetdevVdeOptions:
-#
-# Connect to a vde switch running on the host.
+#     Connect to a vde switch running on the host.
 #
 # @sock: socket path
 #
@@ -553,8 +582,7 @@
 
 ##
 # @NetdevBridgeOptions:
-#
-# Connect a host TAP network interface to a host bridge device.
+#     Connect a host TAP network interface to a host bridge device.
 #
 # @br: bridge name
 #
@@ -569,8 +597,7 @@
 
 ##
 # @NetdevHubPortOptions:
-#
-# Connect two or more net clients through a software hub.
+#     Connect two or more net clients through a software hub.
 #
 # @hubid: hub identifier number
 #
@@ -586,8 +613,8 @@
 
 ##
 # @NetdevNetmapOptions:
-#
-# Connect a client to a netmap-enabled NIC or to a VALE switch port
+#     Connect a client to a netmap-enabled NIC or to a VALE switch
+#     port
 #
 # @ifname: Either the name of an existing network interface supported
 #     by netmap, or the name of a VALE port (created on the fly).  A
@@ -607,8 +634,7 @@
 
 ##
 # @AFXDPMode:
-#
-# Attach mode for a default XDP program
+#     Attach mode for a default XDP program
 #
 # @skb: generic mode, no driver support necessary
 #
@@ -623,8 +649,7 @@
 
 ##
 # @NetdevAFXDPOptions:
-#
-# AF_XDP network backend
+#     AF_XDP network backend
 #
 # @ifname: The name of an existing network interface.
 #
@@ -675,8 +700,7 @@
 
 ##
 # @NetdevVhostUserOptions:
-#
-# Vhost-user network backend
+#     Vhost-user network backend
 #
 # @chardev: name of a unix socket chardev
 #
@@ -695,11 +719,10 @@
 
 ##
 # @NetdevVhostVDPAOptions:
+#     Vhost-vdpa network backend
 #
-# Vhost-vdpa network backend
-#
-# vDPA device is a device that uses a datapath which complies with the
-# virtio specifications with a vendor specific control path.
+#     vDPA device is a device that uses a datapath which complies with
+#     the virtio specifications with a vendor specific control path.
 #
 # @vhostdev: path of vhost-vdpa device (default:'/dev/vhost-vdpa-0')
 #
@@ -726,11 +749,10 @@
 
 ##
 # @NetdevVmnetHostOptions:
+#     vmnet (host mode) network backend.
 #
-# vmnet (host mode) network backend.
-#
-# Allows the vmnet interface to communicate with other vmnet
-# interfaces that are in host mode and also with the host.
+#     Allows the vmnet interface to communicate with other vmnet
+#     interfaces that are in host mode and also with the host.
 #
 # @start-address: The starting IPv4 address to use for the interface.
 #     Must be in the private IP range (RFC 1918).  Must be specified
@@ -769,15 +791,14 @@
 
 ##
 # @NetdevVmnetSharedOptions:
+#     vmnet (shared mode) network backend.
 #
-# vmnet (shared mode) network backend.
-#
-# Allows traffic originating from the vmnet interface to reach the
-# Internet through a network address translator (NAT).  The vmnet
-# interface can communicate with the host and with other shared mode
-# interfaces on the same subnet.  If no DHCP settings, subnet mask and
-# IPv6 prefix specified, the interface can communicate with any of
-# other interfaces in shared mode.
+#     Allows traffic originating from the vmnet interface to reach the
+#     Internet through a network address translator (NAT).  The vmnet
+#     interface can communicate with the host and with other shared
+#     mode interfaces on the same subnet.  If no DHCP settings, subnet
+#     mask and IPv6 prefix specified, the interface can communicate
+#     with any of other interfaces in shared mode.
 #
 # @start-address: The starting IPv4 address to use for the interface.
 #     Must be in the private IP range (RFC 1918).  Must be specified
@@ -814,10 +835,9 @@
 
 ##
 # @NetdevVmnetBridgedOptions:
+#     vmnet (bridged mode) network backend.
 #
-# vmnet (bridged mode) network backend.
-#
-# Bridges the vmnet interface with a physical network interface.
+#     Bridges the vmnet interface with a physical network interface.
 #
 # @ifname: The name of the physical interface to be bridged.
 #
@@ -836,8 +856,7 @@
 
 ##
 # @NetdevStreamOptions:
-#
-# Configuration info for stream socket netdev
+#     Configuration info for stream socket netdev
 #
 # @addr: socket address to listen on (server=true) or connect to
 #     (server=false)
@@ -861,8 +880,7 @@
 
 ##
 # @NetdevDgramOptions:
-#
-# Configuration info for datagram socket netdev.
+#     Configuration info for datagram socket netdev.
 #
 # @remote: remote address
 #
@@ -898,8 +916,7 @@
 
 ##
 # @NetClientDriver:
-#
-# Available netdev drivers.
+#     Available netdev drivers.
 #
 # @l2tpv3: since 2.1
 #
@@ -922,9 +939,13 @@
 # Since: 2.7
 ##
 { 'enum': 'NetClientDriver',
-  'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'stream',
-            'dgram', 'vde', 'bridge', 'hubport', 'netmap', 'vhost-user',
-            'vhost-vdpa',
+  'data': [ 'none', 'nic',
+            { 'name': 'user', 'if': 'CONFIG_SLIRP' },
+            'tap', 'l2tpv3', 'socket', 'stream', 'dgram',
+            { 'name': 'vde', 'if': 'CONFIG_VDE' },
+            'bridge', 'hubport',
+            { 'name': 'netmap', 'if': 'CONFIG_NETMAP' },
+            'vhost-user', 'vhost-vdpa',
             { 'name': 'passt', 'if': 'CONFIG_PASST' },
             { 'name': 'af-xdp', 'if': 'CONFIG_AF_XDP' },
             { 'name': 'vmnet-host', 'if': 'CONFIG_VMNET' },
@@ -933,8 +954,7 @@
 
 ##
 # @Netdev:
-#
-# Captures the configuration of a network device.
+#     Captures the configuration of a network device.
 #
 # @id: identifier for monitor commands.
 #
@@ -949,16 +969,19 @@
     'nic':      'NetLegacyNicOptions',
     'passt':    { 'type': 'NetdevPasstOptions',
                   'if': 'CONFIG_PASST' },
-    'user':     'NetdevUserOptions',
+    'user':     { 'type': 'NetdevUserOptions',
+                  'if': 'CONFIG_SLIRP' },
     'tap':      'NetdevTapOptions',
     'l2tpv3':   'NetdevL2TPv3Options',
     'socket':   'NetdevSocketOptions',
     'stream':   'NetdevStreamOptions',
     'dgram':    'NetdevDgramOptions',
-    'vde':      'NetdevVdeOptions',
+    'vde':      { 'type': 'NetdevVdeOptions',
+                  'if': 'CONFIG_VDE' },
     'bridge':   'NetdevBridgeOptions',
     'hubport':  'NetdevHubPortOptions',
-    'netmap':   'NetdevNetmapOptions',
+    'netmap':   { 'type': 'NetdevNetmapOptions',
+                  'if': 'CONFIG_NETMAP' },
     'af-xdp':   { 'type': 'NetdevAFXDPOptions',
                   'if': 'CONFIG_AF_XDP' },
     'vhost-user': 'NetdevVhostUserOptions',
@@ -972,8 +995,7 @@
 
 ##
 # @RxState:
-#
-# Packets receiving state
+#     Packets receiving state
 #
 # @normal: filter assigned packets according to the mac-table
 #
@@ -987,8 +1009,7 @@
 
 ##
 # @RxFilterInfo:
-#
-# Rx-filter information for a NIC.
+#     Rx-filter information for a NIC.
 #
 # @name: net client name
 #
@@ -1033,8 +1054,8 @@
 
 ##
 # @query-rx-filter:
-#
-# Return rx-filter information for all NICs (or for the given NIC).
+#     Return rx-filter information for all NICs (or for the given
+#     NIC).
 #
 # @name: net client name
 #
@@ -1082,9 +1103,8 @@
 
 ##
 # @NIC_RX_FILTER_CHANGED:
-#
-# Emitted once until the `query-rx-filter` command is executed, the
-# first event will always be emitted
+#     Emitted once until the `query-rx-filter` command is executed,
+#     the first event will always be emitted
 #
 # @name: net client name
 #
@@ -1104,8 +1124,7 @@
 
 ##
 # @AnnounceParameters:
-#
-# Parameters for self-announce timers
+#     Parameters for self-announce timers
 #
 # @initial: Initial delay (in ms) before sending the first GARP/RARP
 #     announcement
@@ -1135,12 +1154,9 @@
 
 ##
 # @announce-self:
-#
-# Trigger generation of broadcast RARP frames to update network
-# switches.  This can be useful when network bonds fail-over the
-# active slave.
-#
-# TODO: This line is a hack to separate the example from the body
+#     Trigger generation of broadcast RARP frames to update network
+#     switches.  This can be useful when network bonds fail-over the
+#     active slave.
 #
 # .. qmp-example::
 #
@@ -1157,11 +1173,10 @@
 
 ##
 # @FAILOVER_NEGOTIATED:
-#
-# Emitted when VIRTIO_NET_F_STANDBY was enabled during feature
-# negotiation.  Failover primary devices which were hidden (not
-# hotplugged when requested) before will now be hotplugged by the
-# virtio-net standby device.
+#     Emitted when VIRTIO_NET_F_STANDBY was enabled during feature
+#     negotiation.  Failover primary devices which were hidden (not
+#     hotplugged when requested) before will now be hotplugged by the
+#     virtio-net standby device.
 #
 # @device-id: QEMU device id of the unplugged device
 #
@@ -1178,8 +1193,7 @@
 
 ##
 # @NETDEV_STREAM_CONNECTED:
-#
-# Emitted when the netdev stream backend is connected
+#     Emitted when the netdev stream backend is connected
 #
 # @netdev-id: QEMU netdev id that is connected
 #
@@ -1208,8 +1222,7 @@
 
 ##
 # @NETDEV_STREAM_DISCONNECTED:
-#
-# Emitted when the netdev stream backend is disconnected
+#     Emitted when the netdev stream backend is disconnected
 #
 # @netdev-id: QEMU netdev id that is disconnected
 #
@@ -1226,8 +1239,7 @@
 
 ##
 # @NETDEV_VHOST_USER_CONNECTED:
-#
-# Emitted when the vhost-user chardev is connected
+#     Emitted when the vhost-user chardev is connected
 #
 # @netdev-id: QEMU netdev id that is connected
 #
@@ -1246,8 +1258,7 @@
 
 ##
 # @NETDEV_VHOST_USER_DISCONNECTED:
-#
-# Emitted when the vhost-user chardev is disconnected
+#     Emitted when the vhost-user chardev is disconnected
 #
 # @netdev-id: QEMU netdev id that is disconnected
 #
@@ -1261,3 +1272,161 @@
 ##
 { 'event': 'NETDEV_VHOST_USER_DISCONNECTED',
   'data': { 'netdev-id': 'str' } }
+
+##
+# @UsernetInfo:
+#     Information about a user-mode network stack (slirp).
+#
+# @hub-id: The hub id, if available.
+#
+# @hub-name: The name of the hub.
+#
+# @info: Network information from slirp.
+#
+# Since: 11.2
+##
+{ 'struct': 'UsernetInfo',
+  'data': {
+    '*hub-id': 'int',
+    'hub-name': 'str',
+    'info': 'str' },
+  'if': 'CONFIG_SLIRP' }
+
+##
+# @x-query-usernet:
+#     Query user-mode network stack connection states.
+#
+# Features:
+#
+# @unstable: This command is meant for debugging.
+#
+# Returns: list of user-mode network stack information.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "x-query-usernet" }
+#     <- { "return": [ { "hub-id": 0, "hub-name": "vnet",
+#                        "info": "..." } ] }
+##
+{ 'command': 'x-query-usernet',
+  'returns': ['UsernetInfo'],
+  'if': 'CONFIG_SLIRP',
+  'features': [ 'unstable' ] }
+
+##
+# @NetFilterInfo:
+#     Information about a netfilter attached to a network client.
+#
+# @name: filter object name (QOM path component)
+#
+# @type: QOM type name (e.g. "filter-mirror")
+#
+# @info: filter properties as comma-separated key=value pairs
+#        (excluding @type)
+#
+# Since: 11.2
+##
+{ 'struct': 'NetFilterInfo',
+  'data': {
+    'name': 'str',
+    'type': 'str',
+    'info': 'str' } }
+
+##
+# @NetworkClientInfo:
+#     Information about a network client.
+#
+# @name: unique network client identifier
+#
+# @queue-index: index of this queue (0 for single-queue clients)
+#
+# @type: network client driver type
+#
+# @info-str: driver-specific formatted information string (e.g.
+#            "model=e1000,macaddr=52:54:00:12:34:56")
+#
+# @peer: the connected peer client (always a leaf; the peer's own
+#        peer field is never populated)
+#
+# @filters: attached netfilters
+#
+# Since: 11.2
+##
+{ 'struct': 'NetworkClientInfo',
+  'data': {
+    'name': 'str',
+    'queue-index': 'uint32',
+    'type': 'NetClientDriver',
+    'info-str': 'str',
+    '*peer': 'NetworkClientInfo',
+    'filters': ['NetFilterInfo'] } }
+
+##
+# @NetHubPortInfo:
+#     Information about a hub port.
+#
+# @name: hub port identifier
+#
+# @peer: the network client connected through this port
+#
+# Since: 11.2
+##
+{ 'struct': 'NetHubPortInfo',
+  'data': {
+    'name': 'str',
+    '*peer': 'NetworkClientInfo' } }
+
+##
+# @NetHubInfo:
+#     Information about a network hub.
+#
+# @id: hub identifier
+#
+# @ports: list of ports on this hub
+#
+# Since: 11.2
+##
+{ 'struct': 'NetHubInfo',
+  'data': {
+    'id': 'int',
+    'ports': ['NetHubPortInfo'] } }
+
+##
+# @NetworkInfo:
+#     Information about the network configuration.
+#
+# @hubs: network hubs and their ports
+#
+# @clients: network clients not associated with a hub
+#
+# Since: 11.2
+##
+{ 'struct': 'NetworkInfo',
+  'data': {
+    'hubs': ['NetHubInfo'],
+    'clients': ['NetworkClientInfo'] } }
+
+##
+# @x-query-network:
+#     Query the network configuration including hubs and clients.
+#
+# Features:
+#
+# @unstable: This command is meant for debugging.
+#
+# Returns: @NetworkInfo describing hubs and clients.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "x-query-network" }
+#     <- { "return": { "clients": [ { "name": "st0",
+#                      "queue-index": 0, "type": "stream",
+#                      "info-str": "listening" } ] } }
+##
+{ 'command': 'x-query-network',
+  'returns': 'NetworkInfo',
+  'features': [ 'unstable' ] }

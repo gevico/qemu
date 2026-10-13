@@ -65,29 +65,37 @@ TCGv hex_llsc_val;
 TCGv_i64 hex_llsc_val_i64;
 #ifndef CONFIG_USER_ONLY
 TCGv_i64 hex_cycle_count;
+TCGv hex_imprecise_exception;
 #endif
 TCGv hex_vstore_addr[VSTORES_MAX];
 TCGv hex_vstore_size[VSTORES_MAX];
 TCGv hex_vstore_pending[VSTORES_MAX];
+#ifndef CONFIG_USER_ONLY
+TCGv_ptr hex_hvx_ptr;
+#endif
 
 #ifndef CONFIG_USER_ONLY
 TCGv_i32 hex_greg[NUM_GREGS];
 TCGv_i32 hex_t_sreg[NUM_SREGS];
-TCGv_i32 hex_cause_code;
 #endif
+static TCGv_i32 hex_cause_code;
 
 static const char * const hexagon_prednames[] = {
   "p0", "p1", "p2", "p3"
 };
 
 intptr_t ctx_future_vreg_off(DisasContext *ctx, int regnum,
-                          int num, bool alloc_ok)
+                          int num, bool alloc_ok, TCGv_ptr *base)
 {
     intptr_t offset;
 
     if (!ctx->need_commit) {
-        return offsetof(CPUHexagonState, VRegs[regnum]);
+        /* Short circuit: the write goes straight to the register file. */
+        *base = hex_hvx_ptr;
+        return HEX_HVX_OFFSET(VRegs[regnum]);
     }
+
+    *base = tcg_env;
 
     /* See if it is already allocated */
     for (int i = 0; i < ctx->future_vregs_idx; i++) {
@@ -107,9 +115,11 @@ intptr_t ctx_future_vreg_off(DisasContext *ctx, int regnum,
 }
 
 intptr_t ctx_tmp_vreg_off(DisasContext *ctx, int regnum,
-                          int num, bool alloc_ok)
+                          int num, bool alloc_ok, TCGv_ptr *base)
 {
     intptr_t offset;
+
+    *base = tcg_env;
 
     /* See if it is already allocated */
     for (int i = 0; i < ctx->tmp_vregs_idx; i++) {
@@ -128,19 +138,14 @@ intptr_t ctx_tmp_vreg_off(DisasContext *ctx, int regnum,
     return offset;
 }
 
-static void gen_exception(int excp, uint32_t PC)
+static void gen_precise_exception(int cause, uint32_t PC)
 {
-    gen_helper_raise_exception(tcg_env, tcg_constant_i32(excp),
+    tcg_gen_movi_i32(hex_cause_code, cause);
+    gen_helper_raise_exception(tcg_env, tcg_constant_i32(HEX_EVENT_PRECISE),
                                tcg_constant_i32(PC));
 }
 
 #ifndef CONFIG_USER_ONLY
-static inline void gen_precise_exception(int excp, uint32_t PC)
-{
-    tcg_gen_movi_i32(hex_cause_code, excp);
-    gen_exception(HEX_EVENT_PRECISE, PC);
-}
-
 static void gen_pcycle_counters(DisasContext *ctx)
 {
     if (ctx->pcycle_enabled) {
@@ -217,6 +222,12 @@ static void gen_end_tb(DisasContext *ctx)
         gen_goto_tb(ctx, 0, ctx->base.tb->pc, true);
         gen_set_label(skip);
         gen_goto_tb(ctx, 1, ctx->next_PC, false);
+    } else if (!ctx->pkt.pkt_has_cof) {
+        /*
+         * Packet with no deferred COF that still ends the TB. PC is
+         * not updated during commit, so set it explicitly to next_PC.
+         */
+         gen_goto_tb(ctx, 0, ctx->next_PC, true);
     } else {
         tcg_gen_lookup_and_goto_ptr();
     }
@@ -224,14 +235,10 @@ static void gen_end_tb(DisasContext *ctx)
     ctx->base.is_jmp = DISAS_NORETURN;
 }
 
-void hex_gen_exception_end_tb(DisasContext *ctx, int excp)
+void hex_gen_exception_end_tb(DisasContext *ctx, int cause)
 {
     gen_exec_counters(ctx);
-#ifdef CONFIG_USER_ONLY
-    gen_exception(excp, ctx->pkt.pc);
-#else
-    gen_precise_exception(excp, ctx->pkt.pc);
-#endif
+    gen_precise_exception(cause, ctx->pkt.pc);
     ctx->base.is_jmp = DISAS_NORETURN;
 }
 
@@ -239,13 +246,13 @@ void hex_gen_exception_end_tb(DisasContext *ctx, int excp)
  * Generate exception for decode failures. Unlike gen_exception_end_tb,
  * this is used when decode fails before ctx->next_PC is initialized.
  */
-static void gen_exception_decode_fail(DisasContext *ctx, int nwords, int excp)
+static void gen_exception_decode_fail(DisasContext *ctx, int nwords, int cause)
 {
     target_ulong fail_pc = ctx->base.pc_next + nwords * sizeof(uint32_t);
 
     gen_exec_counters(ctx);
     tcg_gen_movi_tl(hex_gpr[HEX_REG_PC], fail_pc);
-    gen_exception(excp, fail_pc);
+    gen_precise_exception(cause, fail_pc);
     ctx->base.is_jmp = DISAS_NORETURN;
     ctx->base.pc_next = fail_pc;
 }
@@ -289,6 +296,7 @@ static bool check_for_attrib(Packet *pkt, int attrib)
     return false;
 }
 
+#ifndef CONFIG_USER_ONLY
 static bool check_for_opcode(Packet *pkt, uint16_t opcode)
 {
     for (int i = 0; i < pkt->num_insns; i++) {
@@ -298,6 +306,7 @@ static bool check_for_opcode(Packet *pkt, uint16_t opcode)
     }
     return false;
 }
+#endif
 
 static bool need_slot_cancelled(Packet *pkt)
 {
@@ -319,6 +328,8 @@ static bool sreg_write_ends_tb(int reg_num)
            reg_num == HEX_SREG_STID ||
            reg_num == HEX_SREG_IMASK ||
            reg_num == HEX_SREG_IPENDAD ||
+           reg_num == HEX_SREG_IPEND ||
+           reg_num == HEX_SREG_IAD ||
            reg_num == HEX_SREG_BESTWAIT ||
            reg_num == HEX_SREG_SCHEDCFG;
 }
@@ -352,6 +363,9 @@ static bool has_sreg_write_ends_tb(Packet const *pkt)
 static bool pkt_ends_tb(Packet *pkt)
 {
     if (pkt->pkt_has_cof) {
+        return true;
+    }
+    if (check_for_attrib(pkt, A_ICFLUSHOP)) {
         return true;
     }
 #ifndef CONFIG_USER_ONLY
@@ -559,6 +573,90 @@ static void mark_implicit_writes(DisasContext *ctx)
     mark_implicit_pred_writes(ctx);
 }
 
+/* Clear out the disassembly context */
+static void clear_pkt_ctx(DisasContext *ctx)
+{
+    Packet *pkt = &ctx->pkt;
+    target_ulong next_PC = ctx->base.pc_next + pkt->encod_pkt_size_in_bytes;
+    int i;
+
+    ctx->next_PC = next_PC;
+    ctx->reg_log_idx = 0;
+    bitmap_zero(ctx->regs_written, TOTAL_PER_THREAD_REGS);
+    bitmap_zero(ctx->predicated_regs, TOTAL_PER_THREAD_REGS);
+#ifndef CONFIG_USER_ONLY
+    ctx->greg_log_idx = 0;
+    bitmap_zero(ctx->gregs_written, NUM_GREGS);
+    bitmap_zero(ctx->gregs_multi_write, NUM_GREGS);
+    ctx->sreg_log_idx = 0;
+    bitmap_zero(ctx->sregs_written, NUM_SREGS);
+    bitmap_zero(ctx->sregs_multi_write, NUM_SREGS);
+#endif
+    bitmap_zero(ctx->gpr_multi_write, TOTAL_PER_THREAD_REGS);
+    bitmap_zero(ctx->gpr_uncond, TOTAL_PER_THREAD_REGS);
+    ctx->preg_log_idx = 0;
+    bitmap_zero(ctx->pregs_written, NUM_PREGS);
+    ctx->future_vregs_idx = 0;
+    ctx->tmp_vregs_idx = 0;
+    ctx->vreg_log_idx = 0;
+    bitmap_zero(ctx->vregs_written, NUM_VREGS);
+    bitmap_zero(ctx->vregs_updated_tmp, NUM_VREGS);
+    bitmap_zero(ctx->vregs_updated, NUM_VREGS);
+    bitmap_zero(ctx->vregs_select, NUM_VREGS);
+    bitmap_zero(ctx->predicated_future_vregs, NUM_VREGS);
+    bitmap_zero(ctx->vregs_multi_write, NUM_VREGS);
+    bitmap_zero(ctx->vregs_uncond, NUM_VREGS);
+    bitmap_zero(ctx->predicated_tmp_vregs, NUM_VREGS);
+    bitmap_zero(ctx->qregs_written, NUM_QREGS);
+    bitmap_zero(ctx->qregs_multi_write, NUM_QREGS);
+    ctx->qreg_log_idx = 0;
+    for (i = 0; i < STORES_MAX; i++) {
+        ctx->store_width[i] = 0;
+    }
+    ctx->s1_store_processed = false;
+    ctx->pre_commit = true;
+    for (i = 0; i < TOTAL_PER_THREAD_REGS; i++) {
+        ctx->new_value[i] = NULL;
+    }
+    for (i = 0; i < NUM_PREGS; i++) {
+        ctx->new_pred_value[i] = NULL;
+    }
+}
+
+static bool pkt_has_write_conflict(DisasContext *ctx)
+{
+    DECLARE_BITMAP(gpr_conflict, TOTAL_PER_THREAD_REGS);
+    DECLARE_BITMAP(vregs_conflict, NUM_VREGS);
+
+    bitmap_and(gpr_conflict, ctx->gpr_multi_write, ctx->gpr_uncond,
+               TOTAL_PER_THREAD_REGS);
+    if (!bitmap_empty(gpr_conflict, TOTAL_PER_THREAD_REGS)) {
+        return true;
+    }
+
+    bitmap_and(vregs_conflict, ctx->vregs_multi_write, ctx->vregs_uncond,
+               NUM_VREGS);
+    if (!bitmap_empty(vregs_conflict, NUM_VREGS)) {
+        return true;
+    }
+
+    if (!bitmap_empty(ctx->qregs_multi_write, NUM_QREGS)) {
+        return true;
+    }
+
+#ifndef CONFIG_USER_ONLY
+    if (!bitmap_empty(ctx->gregs_multi_write, NUM_GREGS)) {
+        return true;
+    }
+
+    if (!bitmap_empty(ctx->sregs_multi_write, NUM_SREGS)) {
+        return true;
+    }
+#endif
+
+    return false;
+}
+
 static void analyze_packet(DisasContext *ctx)
 {
     ctx->read_after_write = false;
@@ -576,48 +674,7 @@ static void analyze_packet(DisasContext *ctx)
 
 static void gen_start_packet(DisasContext *ctx)
 {
-    Packet *pkt = &ctx->pkt;
-    target_ulong next_PC = (check_for_opcode(pkt, Y2_k0lock) ||
-                            check_for_opcode(pkt, Y2_tlblock)) ?
-                               ctx->base.pc_next :
-                               ctx->base.pc_next + pkt->encod_pkt_size_in_bytes;
     int i;
-
-    /* Clear out the disassembly context */
-    ctx->next_PC = next_PC;
-    ctx->reg_log_idx = 0;
-    bitmap_zero(ctx->regs_written, TOTAL_PER_THREAD_REGS);
-    bitmap_zero(ctx->predicated_regs, TOTAL_PER_THREAD_REGS);
-#ifndef CONFIG_USER_ONLY
-    ctx->greg_log_idx = 0;
-    ctx->sreg_log_idx = 0;
-#endif
-    ctx->preg_log_idx = 0;
-    bitmap_zero(ctx->pregs_written, NUM_PREGS);
-    ctx->future_vregs_idx = 0;
-    ctx->tmp_vregs_idx = 0;
-    ctx->vreg_log_idx = 0;
-    bitmap_zero(ctx->vregs_written, NUM_VREGS);
-    bitmap_zero(ctx->vregs_updated_tmp, NUM_VREGS);
-    bitmap_zero(ctx->vregs_updated, NUM_VREGS);
-    bitmap_zero(ctx->vregs_select, NUM_VREGS);
-    bitmap_zero(ctx->predicated_future_vregs, NUM_VREGS);
-    bitmap_zero(ctx->predicated_tmp_vregs, NUM_VREGS);
-    bitmap_zero(ctx->qregs_written, NUM_QREGS);
-    ctx->qreg_log_idx = 0;
-    for (i = 0; i < STORES_MAX; i++) {
-        ctx->store_width[i] = 0;
-    }
-    ctx->s1_store_processed = false;
-    ctx->pre_commit = true;
-    for (i = 0; i < TOTAL_PER_THREAD_REGS; i++) {
-        ctx->new_value[i] = NULL;
-    }
-    for (i = 0; i < NUM_PREGS; i++) {
-        ctx->new_pred_value[i] = NULL;
-    }
-
-    analyze_packet(ctx);
 
     /*
      * pregs_written is used both in the analyze phase as well as the code
@@ -659,7 +716,7 @@ static void gen_start_packet(DisasContext *ctx)
     ctx->pkt_ends_tb = pkt_ends_tb(&ctx->pkt);
     ctx->need_next_pc = need_next_PC(ctx);
     if (ctx->need_next_pc) {
-        tcg_gen_movi_tl(hex_next_PC, next_PC);
+        tcg_gen_movi_tl(hex_next_PC, ctx->next_PC);
     }
 
     /* Preload the predicated registers into get_result_gpr(ctx, i) */
@@ -695,29 +752,39 @@ static void gen_start_packet(DisasContext *ctx)
     if (!bitmap_empty(ctx->predicated_future_vregs, NUM_VREGS)) {
         i = find_first_bit(ctx->predicated_future_vregs, NUM_VREGS);
         while (i < NUM_VREGS) {
+            TCGv_ptr VdV_base;
             const intptr_t VdV_off =
-                ctx_future_vreg_off(ctx, i, 1, true);
-            intptr_t src_off = offsetof(CPUHexagonState, VRegs[i]);
-            tcg_gen_gvec_mov(MO_64, VdV_off,
-                             src_off,
-                             sizeof(MMVector),
-                             sizeof(MMVector));
+                ctx_future_vreg_off(ctx, i, 1, true, &VdV_base);
+            intptr_t src_off = HEX_HVX_OFFSET(VRegs[i]);
+            tcg_gen_gvec_mov_var(MO_64, VdV_base, VdV_off,
+                                 hex_hvx_ptr, src_off,
+                                 sizeof(MMVector),
+                                 sizeof(MMVector));
             i = find_next_bit(ctx->predicated_future_vregs, NUM_VREGS, i + 1);
         }
     }
     if (!bitmap_empty(ctx->predicated_tmp_vregs, NUM_VREGS)) {
         i = find_first_bit(ctx->predicated_tmp_vregs, NUM_VREGS);
         while (i < NUM_VREGS) {
+            TCGv_ptr VdV_base;
             const intptr_t VdV_off =
-                ctx_tmp_vreg_off(ctx, i, 1, true);
-            intptr_t src_off = offsetof(CPUHexagonState, VRegs[i]);
-            tcg_gen_gvec_mov(MO_64, VdV_off,
-                             src_off,
-                             sizeof(MMVector),
-                             sizeof(MMVector));
+                ctx_tmp_vreg_off(ctx, i, 1, true, &VdV_base);
+            intptr_t src_off = HEX_HVX_OFFSET(VRegs[i]);
+            tcg_gen_gvec_mov_var(MO_64, VdV_base, VdV_off,
+                                 hex_hvx_ptr, src_off,
+                                 sizeof(MMVector),
+                                 sizeof(MMVector));
             i = find_next_bit(ctx->predicated_tmp_vregs, NUM_VREGS, i + 1);
         }
     }
+
+#ifndef CONFIG_USER_ONLY
+    if (ctx->pkt.pkt_has_hvx && !ctx->hvx_coproc_enabled &&
+        !ctx->hvx_check_emitted) {
+        gen_precise_exception(HEX_CAUSE_NO_COPROC_ENABLE, ctx->pkt.pc);
+        ctx->hvx_check_emitted = true;
+    }
+#endif
 }
 
 bool is_gather_store_insn(DisasContext *ctx)
@@ -830,8 +897,10 @@ static void gen_sreg_writes(DisasContext *ctx)
             gen_helper_modify_ssr(tcg_env, ctx->t_sreg_new_value[reg_num],
                                   old_reg);
         } else if ((reg_num == HEX_SREG_STID) ||
-                   (reg_num == HEX_SREG_IMASK) ||
-                   (reg_num == HEX_SREG_IPENDAD)) {
+                    (reg_num == HEX_SREG_IMASK) ||
+                   (reg_num == HEX_SREG_IPENDAD) ||
+                   (reg_num == HEX_SREG_IPEND) ||
+                   (reg_num == HEX_SREG_IAD)) {
             if (ctx->need_commit && reg_num < HEX_SREG_GLB_START) {
                 tcg_gen_mov_tl(hex_t_sreg[reg_num],
                                ctx->t_sreg_new_value[reg_num]);
@@ -1004,31 +1073,34 @@ static void gen_commit_hvx(DisasContext *ctx)
     /*
      *    for (i = 0; i < ctx->vreg_log_idx; i++) {
      *        int rnum = ctx->vreg_log[i];
-     *        env->VRegs[rnum] = env->future_VRegs[rnum];
+     *        env->hvx->VRegs[rnum] = env->future_VRegs[rnum];
      *    }
      */
     for (i = 0; i < ctx->vreg_log_idx; i++) {
         int rnum = ctx->vreg_log[i];
-        intptr_t dstoff = offsetof(CPUHexagonState, VRegs[rnum]);
-        intptr_t srcoff = ctx_future_vreg_off(ctx, rnum, 1, false);
+        intptr_t dstoff = HEX_HVX_OFFSET(VRegs[rnum]);
+        TCGv_ptr srcbase;
+        intptr_t srcoff = ctx_future_vreg_off(ctx, rnum, 1, false, &srcbase);
         size_t size = sizeof(MMVector);
 
-        tcg_gen_gvec_mov(MO_64, dstoff, srcoff, size, size);
+        tcg_gen_gvec_mov_var(MO_64, hex_hvx_ptr, dstoff, srcbase, srcoff,
+                             size, size);
     }
 
     /*
      *    for (i = 0; i < ctx->qreg_log_idx; i++) {
      *        int rnum = ctx->qreg_log[i];
-     *        env->QRegs[rnum] = env->future_QRegs[rnum];
+     *        env->hvx->QRegs[rnum] = env->future_QRegs[rnum];
      *    }
      */
     for (i = 0; i < ctx->qreg_log_idx; i++) {
         int rnum = ctx->qreg_log[i];
-        intptr_t dstoff = offsetof(CPUHexagonState, QRegs[rnum]);
+        intptr_t dstoff = HEX_HVX_OFFSET(QRegs[rnum]);
         intptr_t srcoff = offsetof(CPUHexagonState, future_QRegs[rnum]);
         size_t size = sizeof(MMQReg);
 
-        tcg_gen_gvec_mov(MO_64, dstoff, srcoff, size, size);
+        tcg_gen_gvec_mov_var(MO_64, hex_hvx_ptr, dstoff, tcg_env, srcoff,
+                             size, size);
     }
 
     if (pkt_has_hvx_store(&ctx->pkt)) {
@@ -1059,6 +1131,22 @@ static void update_exec_counters(DisasContext *ctx)
     ctx->num_hvx_insns += num_hvx_insns;
     ctx->num_cycles += PCYCLES_PER_PACKET;
 }
+
+#ifndef CONFIG_USER_ONLY
+/*
+ * A tlbp instruction may detect multiple TLB matches and set a pending
+ * imprecise exception.  Raise it after the packet that ran the tlbp.
+ */
+static void check_imprecise_exception(DisasContext *ctx)
+{
+    TCGv PC = tcg_constant_tl(ctx->pkt.pc);
+    TCGLabel *label = gen_new_label();
+
+    tcg_gen_brcondi_tl(TCG_COND_EQ, hex_imprecise_exception, 0, label);
+    gen_helper_raise_exception(tcg_env, hex_imprecise_exception, PC);
+    gen_set_label(label);
+}
+#endif
 
 static void gen_commit_packet(DisasContext *ctx)
 {
@@ -1159,6 +1247,10 @@ static void gen_commit_packet(DisasContext *ctx)
         ctx->pkt.vhist_insn->generate(ctx);
     }
 
+#ifndef CONFIG_USER_ONLY
+    check_imprecise_exception(ctx);
+#endif
+
     if (ctx->pkt_ends_tb || ctx->base.is_jmp == DISAS_NORETURN) {
         gen_end_tb(ctx);
     }
@@ -1179,7 +1271,11 @@ static void decode_and_translate_packet(CPUHexagonState *env, DisasContext *ctx)
     words_read = decode_packet(ctx, nwords, words, &ctx->pkt, false);
     if (words_read > 0) {
         ctx->pkt.pc = ctx->base.pc_next;
-        if (ctx->pkt.pkt_has_write_conflict) {
+
+        clear_pkt_ctx(ctx);
+        analyze_packet(ctx);
+
+        if (pkt_has_write_conflict(ctx)) {
             gen_exception_decode_fail(ctx, words_read,
                                       HEX_CAUSE_REG_WRITE_CONFLICT);
             return;
@@ -1209,11 +1305,15 @@ static void hexagon_tr_init_disas_context(DisasContextBase *dcbase,
     ctx->num_hvx_insns = 0;
     ctx->branch_cond = TCG_COND_NEVER;
     ctx->is_tight_loop = FIELD_EX32(hex_flags, TB_FLAGS, IS_TIGHT_LOOP);
-    ctx->short_circuit = hex_cpu->short_circuit;
+    ctx->short_circuit = hex_cpu->cfg.short_circuit;
     ctx->hex_def = HEXAGON_CPU_GET_CLASS(hex_cpu)->hex_def;
+    ctx->ieee_fp_extension = hex_cpu->cfg.ieee_fp_extension;
 #ifndef CONFIG_USER_ONLY
     ctx->num_cycles = 0;
     ctx->pcycle_enabled = FIELD_EX32(hex_flags, TB_FLAGS, PCYCLE_ENABLED);
+    ctx->hvx_coproc_enabled =
+        FIELD_EX32(hex_flags, TB_FLAGS, HVX_COPROC_ENABLED);
+    ctx->hvx_check_emitted = false;
 #endif
 }
 
@@ -1267,7 +1367,7 @@ static void hexagon_tr_translate_packet(DisasContextBase *dcbase, CPUState *cpu)
          * so end the TLB after every packet.
          */
         HexagonCPU *hex_cpu = env_archcpu(env);
-        if (hex_cpu->lldb_compat && qemu_loglevel_mask(CPU_LOG_TB_CPU)) {
+        if (hex_cpu->cfg.lldb_compat && qemu_loglevel_mask(CPU_LOG_TB_CPU)) {
             ctx->base.is_jmp = DISAS_TOO_MANY;
         }
     }
@@ -1324,6 +1424,8 @@ void hexagon_translate_init(void)
     opcode_init();
 
 #ifndef CONFIG_USER_ONLY
+    hex_hvx_ptr = tcg_global_mem_new_ptr(tcg_env,
+        offsetof(CPUHexagonState, hvx), "hvx");
     for (i = 0; i < NUM_GREGS; i++) {
             hex_greg[i] = tcg_global_mem_new_i32(tcg_env,
                 offsetof(CPUHexagonState, greg[i]),
@@ -1360,11 +1462,13 @@ void hexagon_translate_init(void)
         offsetof(CPUHexagonState, llsc_val), "llsc_val");
     hex_llsc_val_i64 = tcg_global_mem_new_i64(tcg_env,
         offsetof(CPUHexagonState, llsc_val_i64), "llsc_val_i64");
-#ifndef CONFIG_USER_ONLY
     hex_cause_code = tcg_global_mem_new_i32(tcg_env,
         offsetof(CPUHexagonState, cause_code), "cause_code");
+#ifndef CONFIG_USER_ONLY
     hex_cycle_count = tcg_global_mem_new_i64(tcg_env,
         offsetof(CPUHexagonState, t_cycle_count), "t_cycle_count");
+    hex_imprecise_exception = tcg_global_mem_new(tcg_env,
+        offsetof(CPUHexagonState, imprecise_exception), "imprecise_exception");
 #endif
     for (i = 0; i < STORES_MAX; i++) {
         snprintf(store_addr_names[i], NAME_LEN, "store_addr_%d", i);

@@ -77,8 +77,7 @@
 
 ##
 # @qom-list:
-#
-# List properties of a object given a path in the object model.
+#     List properties of a object given a path in the object model.
 #
 # @path: the path within the object model.  See `qom-get` for a
 #     description of this parameter.
@@ -103,8 +102,7 @@
 
 ##
 # @qom-get:
-#
-# Get a property value.
+#     Get a property value.
 #
 # @path: The path within the object model.  There are two forms of
 #     supported paths--absolute and partial paths.
@@ -154,9 +152,8 @@
 
 ##
 # @qom-list-get:
-#
-# List properties and their values for each object path in the input
-# list.
+#     List properties and their values for each object path in the
+#     input list.
 #
 # @paths: The absolute or partial path for each object, as described
 #     in `qom-get`.
@@ -176,8 +173,7 @@
 
 ##
 # @qom-set:
-#
-# Set a property value.
+#     Set a property value.
 #
 # @path: see `qom-get` for a description of this parameter
 #
@@ -202,44 +198,50 @@
 
 ##
 # @ObjectTypeInfo:
-#
-# This structure describes a search result from `qom-list-types`
+#     This structure describes a search result from `qom-list-types`
 #
 # @name: the type name found in the search
 #
 # @abstract: the type is abstract and can't be directly instantiated.
 #     Omitted if false.  (since 2.10)
 #
+# @secure: the type provides a security boundary.  Omitted if false.
+#     (since 11.2)
+#
 # @parent: Name of parent type, if any (since 2.10)
 #
 # Since: 1.1
 ##
 { 'struct': 'ObjectTypeInfo',
-  'data': { 'name': 'str', '*abstract': 'bool', '*parent': 'str' } }
+  'data': { 'name': 'str',
+            '*abstract': 'bool',
+            '*parent': 'str',
+            '*secure': 'bool' } }
 
 ##
 # @qom-list-types:
-#
-# Return a list of types given search parameters.
+#     Return a list of types given search parameters.
 #
 # @implements: if specified, only return types that implement this
 #     type name
 #
 # @abstract: if true, include abstract types in the results
 #
+# @secure: if set, filter to only include types with matching security
+#     status (since 11.2)
+#
 # Returns: a list of types, or an empty list if no results are found
 #
 # Since: 1.1
 ##
 { 'command': 'qom-list-types',
-  'data': { '*implements': 'str', '*abstract': 'bool' },
+  'data': { '*implements': 'str', '*abstract': 'bool', '*secure': 'bool' },
   'returns': [ 'ObjectTypeInfo' ],
   'allow-preconfig': true }
 
 ##
 # @qom-list-properties:
-#
-# List properties associated with a QOM object.
+#     List properties associated with a QOM object.
 #
 # @typename: the type name of an object
 #
@@ -258,8 +260,7 @@
 
 ##
 # @CanHostSocketcanProperties:
-#
-# Properties for can-host-socketcan objects.
+#     Properties for can-host-socketcan objects.
 #
 # @if: interface name of the host system CAN bus to connect to
 #
@@ -275,8 +276,7 @@
 
 ##
 # @ColoCompareProperties:
-#
-# Properties for colo-compare objects.
+#     Properties for colo-compare objects.
 #
 # @primary_in: name of the character device backend to use for the
 #     primary input (incoming packets are redirected to @outdev)
@@ -323,9 +323,8 @@
 
 ##
 # @CryptodevBackendProperties:
-#
-# Properties for cryptodev-backend and cryptodev-backend-builtin
-# objects.
+#     Properties for cryptodev-backend and cryptodev-backend-builtin
+#     objects.
 #
 # @queues: the number of queues for the cryptodev backend.  Ignored
 #     for cryptodev-backend and must be 1 for
@@ -344,8 +343,7 @@
 
 ##
 # @CryptodevVhostUserProperties:
-#
-# Properties for cryptodev-vhost-user objects.
+#     Properties for cryptodev-vhost-user objects.
 #
 # @chardev: the name of a Unix domain socket character device that
 #     connects to the vhost-user server
@@ -359,8 +357,7 @@
 
 ##
 # @DBusVMStateProperties:
-#
-# Properties for dbus-vmstate objects.
+#     Properties for dbus-vmstate objects.
 #
 # @addr: the name of the DBus bus to connect to
 #
@@ -375,9 +372,8 @@
 
 ##
 # @NetfilterInsert:
-#
-# Indicates where to insert a netfilter relative to a given other
-# filter.
+#     Indicates where to insert a netfilter relative to a given other
+#     filter.
 #
 # @before: insert before the specified filter
 #
@@ -390,8 +386,7 @@
 
 ##
 # @NetfilterProperties:
-#
-# Properties for objects of classes derived from netfilter.
+#     Properties for objects of classes derived from netfilter.
 #
 # @netdev: id of the network device backend to filter
 #
@@ -423,8 +418,7 @@
 
 ##
 # @FilterBufferProperties:
-#
-# Properties for filter-buffer objects.
+#     Properties for filter-buffer objects.
 #
 # @interval: a non-zero interval in microseconds.  All packets
 #     arriving in the given interval are delayed until the end of the
@@ -438,8 +432,7 @@
 
 ##
 # @FilterDumpProperties:
-#
-# Properties for filter-dump objects.
+#     Properties for filter-dump objects.
 #
 # @file: the filename where the dumped packets should be stored
 #
@@ -455,8 +448,7 @@
 
 ##
 # @FilterMirrorProperties:
-#
-# Properties for filter-mirror objects.
+#     Properties for filter-mirror objects.
 #
 # @outdev: the name of a character device backend to which all
 #     incoming packets are mirrored
@@ -473,8 +465,7 @@
 
 ##
 # @FilterRedirectorProperties:
-#
-# Properties for filter-redirector objects.
+#     Properties for filter-redirector objects.
 #
 # At least one of @indev or @outdev must be present.  If both are
 # present, they must not refer to the same character device backend.
@@ -498,8 +489,7 @@
 
 ##
 # @FilterRewriterProperties:
-#
-# Properties for filter-rewriter objects.
+#     Properties for filter-rewriter objects.
 #
 # @vnet_hdr_support: if true, vnet header support is enabled
 #     (default: false)
@@ -512,8 +502,7 @@
 
 ##
 # @InputBarrierProperties:
-#
-# Properties for input-barrier objects.
+#     Properties for input-barrier objects.
 #
 # @name: the screen name as declared in the screens section of
 #     barrier.conf
@@ -545,8 +534,7 @@
 
 ##
 # @InputLinuxProperties:
-#
-# Properties for input-linux objects.
+#     Properties for input-linux objects.
 #
 # @evdev: the path of the host evdev device to use
 #
@@ -569,8 +557,7 @@
 
 ##
 # @EventLoopBaseProperties:
-#
-# Common properties for event loops
+#     Common properties for event loops
 #
 # @aio-max-batch: maximum number of requests in a batch for the AIO
 #     engine, 0 means that the engine will use its default.
@@ -591,8 +578,7 @@
 
 ##
 # @IothreadProperties:
-#
-# Properties for iothread objects.
+#     Properties for iothread objects.
 #
 # @poll-max-ns: the maximum number of nanoseconds to busy wait for
 #     events.  0 means polling is disabled (default: 32768 on POSIX
@@ -626,8 +612,7 @@
 
 ##
 # @MainLoopProperties:
-#
-# Properties for the main-loop object.
+#     Properties for the main-loop object.
 #
 # Since: 7.1
 ##
@@ -637,8 +622,7 @@
 
 ##
 # @MemoryBackendProperties:
-#
-# Properties for objects of classes derived from memory-backend.
+#     Properties for objects of classes derived from memory-backend.
 #
 # @merge: if true, mark the memory as mergeable (default depends on
 #     the machine type)
@@ -696,8 +680,7 @@
 
 ##
 # @MemoryBackendFileProperties:
-#
-# Properties for memory-backend-file objects.
+#     Properties for memory-backend-file objects.
 #
 # @align: the base address alignment when QEMU mmap(2)s @mem-path.
 #     Some backend stores specified by @mem-path require an alignment
@@ -757,8 +740,7 @@
 
 ##
 # @MemoryBackendMemfdProperties:
-#
-# Properties for memory-backend-memfd objects.
+#     Properties for memory-backend-memfd objects.
 #
 # @hugetlb: if true, the file to be created resides in the hugetlbfs
 #     filesystem (default: false)
@@ -771,19 +753,31 @@
 # @seal: if true, create a sealed-file, which will block further
 #     resizing of the memory (default: true)
 #
+# @guest-memfd: if 'on', use guest-memfd to back the memory region.
+#     See the :doc:`/system/guest-memfd` documentation for more
+#     details.  If 'auto', the option will default to 'off'
+#     currently, but in the future it may result in the option being
+#     set to 'on' for QEMU configurations that explicitly require it.
+#     (default: auto, since: 11.2)
+#
+# Features:
+#
+# @unstable: Member @guest-memfd is experimental.
+#
 # Since: 2.12
 ##
 { 'struct': 'MemoryBackendMemfdProperties',
   'base': 'MemoryBackendProperties',
   'data': { '*hugetlb': 'bool',
             '*hugetlbsize': 'size',
-            '*seal': 'bool' },
+            '*seal': 'bool',
+            '*guest-memfd': { 'type': 'OnOffAuto',
+                              'features': [ 'unstable' ] } },
   'if': 'CONFIG_LINUX' }
 
 ##
 # @MemoryBackendShmProperties:
-#
-# Properties for memory-backend-shm objects.
+#     Properties for memory-backend-shm objects.
 #
 # This memory backend supports only shared memory, which is the
 # default.
@@ -797,8 +791,7 @@
 
 ##
 # @MemoryBackendEpcProperties:
-#
-# Properties for memory-backend-epc objects.
+#     Properties for memory-backend-epc objects.
 #
 # The @merge boolean option is false by default with epc
 #
@@ -813,8 +806,7 @@
 
 ##
 # @PrManagerHelperProperties:
-#
-# Properties for pr-manager-helper objects.
+#     Properties for pr-manager-helper objects.
 #
 # @path: the path to a Unix domain socket for connecting to the
 #     external helper
@@ -827,8 +819,7 @@
 
 ##
 # @QtestProperties:
-#
-# Properties for qtest objects.
+#     Properties for qtest objects.
 #
 # @chardev: the chardev to be used to receive qtest commands on.
 #
@@ -842,8 +833,7 @@
 
 ##
 # @RemoteObjectProperties:
-#
-# Properties for x-remote-object objects.
+#     Properties for x-remote-object objects.
 #
 # @fd: file descriptor name previously passed via `getfd` command
 #
@@ -857,8 +847,7 @@
 
 ##
 # @VfioUserServerProperties:
-#
-# Properties for x-vfio-user-server objects.
+#     Properties for x-vfio-user-server objects.
 #
 # @socket: socket to be used by the libvfio-user library
 #
@@ -871,8 +860,7 @@
 
 ##
 # @IOMMUFDProperties:
-#
-# Properties for iommufd objects.
+#     Properties for iommufd objects.
 #
 # @fd: file descriptor name previously passed via `getfd` command,
 #     which represents a pre-opened /dev/iommu.  This allows the
@@ -887,8 +875,7 @@
 
 ##
 # @AcpiGenericInitiatorProperties:
-#
-# Properties for acpi-generic-initiator objects.
+#     Properties for acpi-generic-initiator objects.
 #
 # @pci-dev: PCI device ID to be associated with the node
 #
@@ -902,8 +889,7 @@
 
 ##
 # @AcpiGenericPortProperties:
-#
-# Properties for acpi-generic-port objects.
+#     Properties for acpi-generic-port objects.
 #
 # @pci-bus: QOM path of the PCI bus of the hostbridge associated with
 #     this SRAT Generic Port Affinity Structure.  This is the same as
@@ -941,8 +927,7 @@
 
 ##
 # @RngProperties:
-#
-# Properties for objects of classes derived from rng.
+#     Properties for objects of classes derived from rng.
 #
 # @opened: if true, the device is opened immediately when applying
 #     this option and will probably fail when processing the next
@@ -961,8 +946,7 @@
 
 ##
 # @RngEgdProperties:
-#
-# Properties for rng-egd objects.
+#     Properties for rng-egd objects.
 #
 # @chardev: the name of a character device backend that provides the
 #     connection to the RNG daemon
@@ -975,8 +959,7 @@
 
 ##
 # @RngRandomProperties:
-#
-# Properties for rng-random objects.
+#     Properties for rng-random objects.
 #
 # @filename: the filename of the device on the host to obtain entropy
 #     from (default: "/dev/urandom")
@@ -990,8 +973,7 @@
 
 ##
 # @IgvmCfgProperties:
-#
-# Properties common to objects that handle IGVM files.
+#     Properties common to objects that handle IGVM files.
 #
 # @file: IGVM file to use to configure guest
 #
@@ -1003,8 +985,7 @@
 
 ##
 # @SevCommonProperties:
-#
-# Properties common to objects that are derivatives of sev-common.
+#     Properties common to objects that are derivatives of sev-common.
 #
 # @sev-device: SEV device to use (default: "/dev/sev")
 #
@@ -1017,6 +998,10 @@
 #     designated guest firmware page for measured boot with -kernel
 #     (default: false) (since 6.2)
 #
+# @debug-swap: enable virtualization of debug registers,
+#     only supported on SEV-ES and SEV-SNP guests
+#     (default: false) (since 11.1)
+#
 # Features:
 #
 # @confidential-guest-reset: If present, the hypervisor supports
@@ -1028,13 +1013,13 @@
   'data': { '*sev-device': 'str',
             '*cbitpos': 'uint32',
             'reduced-phys-bits': 'uint32',
-            '*kernel-hashes': 'bool' },
+            '*kernel-hashes': 'bool',
+            '*debug-swap': 'bool' },
   'features': ['confidential-guest-reset']}
 
 ##
 # @SevGuestProperties:
-#
-# Properties for sev-guest objects.
+#     Properties for sev-guest objects.
 #
 # @dh-cert-file: guest owners DH certificate (encoded with base64)
 #
@@ -1108,6 +1093,12 @@
 #     firmware.  Set this to true to disable the use of VCEK.
 #     (default: false) (since: 9.1)
 #
+# @secure-tsc: enable Secure TSC
+#     (default: false) (since 11.1)
+#
+# @tsc-frequency: set secure TSC frequency.  Only valid if Secure TSC
+#     is enabled (default: zero) (since 11.1)
+#
 # Since: 9.1
 ##
 { 'struct': 'SevSnpGuestProperties',
@@ -1119,12 +1110,13 @@
             '*id-auth': 'str',
             '*author-key-enabled': 'bool',
             '*host-data': 'str',
-            '*vcek-disabled': 'bool' } }
+            '*vcek-disabled': 'bool',
+            '*secure-tsc': 'bool',
+            '*tsc-frequency': 'uint32' } }
 
 ##
 # @TdxGuestProperties:
-#
-# Properties for tdx-guest objects.
+#     Properties for tdx-guest objects.
 #
 # @attributes: The 'attributes' of a TD guest that is passed to
 #     KVM_TDX_INIT_VM
@@ -1168,8 +1160,7 @@
 
 ##
 # @ThreadContextProperties:
-#
-# Properties for thread context objects.
+#     Properties for thread context objects.
 #
 # @cpu-affinity: the list of host CPU numbers used as CPU affinity for
 #     all threads created in the thread context (default: QEMU main
@@ -1189,8 +1180,7 @@
 
 ##
 # @MonitorProperties:
-#
-# Properties for all monitors
+#     Properties for all monitors
 #
 # @chardev: ID of the character device providing the monitor transport
 #
@@ -1201,8 +1191,7 @@
 
 ##
 # @MonitorHMPProperties:
-#
-# Properties for the HMP monitor
+#     Properties for the HMP monitor
 #
 # @readline: whether to enable readline for line editing
 #      (default: true)
@@ -1216,8 +1205,7 @@
 
 ##
 # @MonitorQMPCloseAction:
-#
-# Action to take when the character device backend is closed.
+#     Action to take when the character device backend is closed.
 #
 # @none: take no action
 #
@@ -1231,8 +1219,7 @@
 
 ##
 # @MonitorQMPProperties:
-#
-# Properties for the QMP monitor
+#     Properties for the QMP monitor
 #
 # @pretty: whether to pretty print JSON responses (default: false)
 #
@@ -1325,8 +1312,7 @@
 
 ##
 # @ObjectOptions:
-#
-# Describes the options of a user creatable QOM object.
+#     Describes the options of a user creatable QOM object.
 #
 # @qom-type: the class name for the object to be created
 #
@@ -1403,8 +1389,7 @@
 
 ##
 # @object-add:
-#
-# Create a QOM object.
+#     Create a QOM object.
 #
 # Errors:
 #     - If @qom-type is not a valid class name
@@ -1423,8 +1408,7 @@
 
 ##
 # @object-del:
-#
-# Remove a QOM object.
+#     Remove a QOM object.
 #
 # @id: the name of the QOM object to remove
 #

@@ -23,12 +23,13 @@
 #ifndef CONFIG_USER_ONLY
 #define NUM_GREGS 32
 #define GREG_WRITES_MAX 2
-#define NUM_SREGS 64
+#define NUM_SREGS 106
 #define SREG_WRITES_MAX 2
 #endif
 
 typedef struct HexagonTLBState HexagonTLBState;
 typedef struct HexagonGlobalRegState HexagonGlobalRegState;
+typedef struct HexagonHVXContextState HexagonHVXContextState;
 
 #include "cpu-qom.h"
 #include "exec/cpu-common.h"
@@ -39,6 +40,7 @@ typedef struct HexagonGlobalRegState HexagonGlobalRegState;
 #include "qemu/bitmap.h"
 
 #include "target/hexagon/reg_fields.h"
+#include "hw/intc/hex-l2vic.h"
 
 #define NUM_PREGS 4
 #define TOTAL_PER_THREAD_REGS 64
@@ -48,8 +50,9 @@ typedef struct HexagonGlobalRegState HexagonGlobalRegState;
 #define REG_WRITES_MAX 32
 #define PRED_WRITES_MAX 5                   /* 4 insns + endloop */
 #define VSTORES_MAX 2
+#define HVX_CONTEXTS_MAX 8
 #define MAX_TLB_ENTRIES 1024
-#define THREADS_MAX 8
+#define THREADS_MAX 16
 
 #define CPU_RESOLVING_TYPE TYPE_HEXAGON_CPU
 #ifndef CONFIG_USER_ONLY
@@ -119,6 +122,11 @@ typedef struct {
 /* Maximum number of vector temps in a packet */
 #define VECTOR_TEMPS_MAX            4
 
+typedef struct HexagonHVXContext {
+    MMVector VRegs[NUM_VREGS];
+    MMQReg QRegs[NUM_QREGS];
+} QEMU_ALIGNED(16) HexagonHVXContext;
+
 typedef struct CPUArchState {
     target_ulong gpr[TOTAL_PER_THREAD_REGS];
     target_ulong pred[NUM_PREGS];
@@ -146,21 +154,27 @@ typedef struct CPUArchState {
     uint64_t t_cycle_count;
 #endif
     uint32_t next_PC;
+    uint32_t imprecise_exception;
     target_ulong new_value_usr;
 
     MemLog mem_log_stores[STORES_MAX];
 
     float_status fp_status;
+    float_status hvx_fp_status;
 
     target_ulong llsc_addr;
     target_ulong llsc_val;
     uint64_t     llsc_val_i64;
 
-    MMVector VRegs[NUM_VREGS] QEMU_ALIGNED(16);
+#ifdef CONFIG_USER_ONLY
+    HexagonHVXContext hvx_ctx;
+#else
+    HexagonHVXContext *hvx;
+#endif
+
     MMVector future_VRegs[VECTOR_TEMPS_MAX] QEMU_ALIGNED(16);
     MMVector tmp_VRegs[VECTOR_TEMPS_MAX] QEMU_ALIGNED(16);
 
-    MMQReg QRegs[NUM_QREGS] QEMU_ALIGNED(16);
     MMQReg future_QRegs[NUM_QREGS] QEMU_ALIGNED(16);
 
     /* Temporaries used within instructions */
@@ -185,27 +199,36 @@ typedef struct HexagonCPUClass {
     const HexagonCPUDef *hex_def;
 } HexagonCPUClass;
 
+#include "cpu_bits.h"
+
 struct ArchCPU {
     CPUState parent_obj;
 
     CPUHexagonState env;
-
-    bool lldb_compat;
-    target_ulong lldb_stack_adjust;
-    bool short_circuit;
+    HexagonCPUConfig cfg;
 #ifndef CONFIG_USER_ONLY
+    HexagonHVXContextState *hvx_ctx[HVX_CONTEXTS_MAX];
     HexagonTLBState *tlb;
     uint32_t boot_addr;
     HexagonGlobalRegState *globalregs;
     uint32_t htid;
+    HexL2VicInterface *l2vic;
 #endif
 };
 
-#include "cpu_bits.h"
+static inline HexagonHVXContext *hex_hvx(CPUHexagonState *env)
+{
+#ifdef CONFIG_USER_ONLY
+    return &env->hvx_ctx;
+#else
+    return env->hvx;
+#endif
+}
 
 FIELD(TB_FLAGS, IS_TIGHT_LOOP, 0, 1)
 FIELD(TB_FLAGS, MMU_INDEX, 1, 3)
 FIELD(TB_FLAGS, PCYCLE_ENABLED, 4, 1)
+FIELD(TB_FLAGS, HVX_COPROC_ENABLED, 5, 1)
 
 G_NORETURN void hexagon_raise_exception_err(CPUHexagonState *env,
                                             uint32_t exception,
@@ -216,7 +239,7 @@ G_NORETURN void hexagon_raise_exception_err(CPUHexagonState *env,
  * @return true if the @a thread_env hardware thread is
  * not stopped.
  */
-bool hexagon_thread_is_enabled(CPUHexagonState *thread_env);
+bool hexagon_thread_is_enabled(const CPUHexagonState *thread_env);
 uint32_t hexagon_greg_read(CPUHexagonState *env, uint32_t reg);
 void hexagon_cpu_soft_reset(CPUHexagonState *env);
 #endif

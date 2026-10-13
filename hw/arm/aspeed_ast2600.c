@@ -8,6 +8,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
 #include "hw/misc/unimp.h"
 #include "hw/arm/aspeed_soc.h"
@@ -24,6 +25,7 @@
 static const hwaddr aspeed_soc_ast2600_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
     [ASPEED_DEV_SRAM0]     = 0x10000000,
+    [ASPEED_DEV_SRAM1]     = 0x1E710000, /* ACRY SRAM */
     [ASPEED_DEV_DPMCU]     = 0x18000000,
     /* 0x16000000     0x17FFFFFF : AHB BUS do LPC Bus bridge */
     [ASPEED_DEV_IOMEM]     = 0x1E600000,
@@ -32,6 +34,7 @@ static const hwaddr aspeed_soc_ast2600_memmap[] = {
     [ASPEED_DEV_SPI1]      = 0x1E630000,
     [ASPEED_DEV_SPI2]      = 0x1E631000,
     [ASPEED_DEV_EHCI1]     = 0x1E6A1000,
+    [ASPEED_DEV_UDC]       = 0x1E6A2000,
     [ASPEED_DEV_EHCI2]     = 0x1E6A3000,
     [ASPEED_DEV_MII1]      = 0x1E650000,
     [ASPEED_DEV_MII2]      = 0x1E650008,
@@ -50,6 +53,7 @@ static const hwaddr aspeed_soc_ast2600_memmap[] = {
     [ASPEED_DEV_DP]        = 0x1E6EB000,
     [ASPEED_DEV_PCIE_PHY1] = 0x1E6ED200,
     [ASPEED_DEV_SBC]       = 0x1E6F2000,
+    [ASPEED_DEV_ACRY]      = 0x1E6FA000,
     [ASPEED_DEV_EMMC_BC]   = 0x1E6f5000,
     [ASPEED_DEV_VIDEO]     = 0x1E700000,
     [ASPEED_DEV_SDHCI]     = 0x1E740000,
@@ -142,6 +146,7 @@ static const int aspeed_soc_ast2600_irqmap[] = {
     [ASPEED_DEV_FSI1]      = 100,
     [ASPEED_DEV_FSI2]      = 101,
     [ASPEED_DEV_I3C]       = 102,   /* 102 -> 107 */
+    [ASPEED_DEV_ACRY]      = 160,
 };
 
 static qemu_irq aspeed_soc_ast2600_get_irq(AspeedSoCState *s, int dev)
@@ -214,6 +219,10 @@ static void aspeed_soc_ast2600_init(Object *obj)
                                 TYPE_PLATFORM_EHCI);
     }
 
+    object_initialize_child(obj, "udc", &a->udc, TYPE_ASPEED_UDC);
+    object_initialize_child(obj, "ehci2-udc-orgate", &a->ehci2_udc_orgate,
+                            TYPE_OR_IRQ);
+
     snprintf(typename, sizeof(typename), "aspeed.sdmc-%s", socname);
     object_initialize_child(obj, "sdmc", &s->sdmc, typename);
     object_property_add_alias(obj, "ram-size", OBJECT(&s->sdmc),
@@ -266,6 +275,8 @@ static void aspeed_soc_ast2600_init(Object *obj)
 
     snprintf(typename, sizeof(typename), "aspeed.hace-%s", socname);
     object_initialize_child(obj, "hace", &s->hace, typename);
+
+    object_initialize_child(obj, "acry", &s->acry, TYPE_ASPEED_ACRY);
 
     object_initialize_child(obj, "i3c", &s->i3c, TYPE_ASPEED_I3C);
 
@@ -361,6 +372,7 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
     AspeedSoCState *s = ASPEED_SOC(dev);
     AspeedSoCClass *sc = ASPEED_SOC_GET_CLASS(s);
     qemu_irq irq;
+    g_autofree char *sram1_name = NULL;
     g_autofree char *sram_name = NULL;
     int uart;
 
@@ -443,6 +455,19 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
     }
     memory_region_add_subregion(s->memory,
                                 sc->memmap[ASPEED_DEV_SRAM0], &s->sram[0]);
+
+    /* ACRY SRAM */
+    sram1_name = g_strdup_printf("aspeed.acry.sram.%d",
+                                 CPU(&a->cpu[0])->cpu_index);
+    if (!memory_region_init_ram(&s->sram[1], OBJECT(s), sram1_name,
+                                sc->sram_size[1], errp)) {
+        return;
+    }
+    memory_region_init(&s->sram_container[1], OBJECT(s),
+                       "aspeed.acry.sram-container", sc->sram_size[1]);
+    memory_region_add_subregion(&s->sram_container[1], 0, &s->sram[1]);
+    memory_region_add_subregion(s->memory, sc->memmap[ASPEED_DEV_SRAM1],
+                                &s->sram_container[1]);
 
     /* DPMCU */
     aspeed_mmio_map_unimplemented(s->memory, SYS_BUS_DEVICE(&s->dpmcu),
@@ -561,6 +586,16 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
                            aspeed_soc_ast2600_get_irq(s, ASPEED_DEV_SPI1 + i));
     }
 
+    /*
+     * EHCI2 and the UDC share one SoC interrupt line, so OR their outputs
+     * together and drive that GIC input from the OR gate.
+     */
+    object_property_set_int(OBJECT(&a->ehci2_udc_orgate), "num-lines", 2,
+                            &error_abort);
+    qdev_realize(DEVICE(&a->ehci2_udc_orgate), NULL, &error_abort);
+    qdev_connect_gpio_out(DEVICE(&a->ehci2_udc_orgate), 0,
+                          aspeed_soc_ast2600_get_irq(s, ASPEED_DEV_EHCI2));
+
     /* EHCI */
     for (i = 0; i < sc->ehcis_num; i++) {
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->ehci[i]), errp)) {
@@ -568,10 +603,26 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
         }
         aspeed_mmio_map(s->memory, SYS_BUS_DEVICE(&s->ehci[i]), 0,
                         sc->memmap[ASPEED_DEV_EHCI1 + i]);
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->ehci[i]), 0,
-                           aspeed_soc_ast2600_get_irq(s,
-                                                      ASPEED_DEV_EHCI1 + i));
     }
+    /*
+     * EHCI1 has its own IRQ; EHCI2 shares the UDC's IRQ, so route it through
+     * the OR gate.
+     */
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->ehci[0]), 0,
+                       aspeed_soc_ast2600_get_irq(s, ASPEED_DEV_EHCI1));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->ehci[1]), 0,
+                       qdev_get_gpio_in(DEVICE(&a->ehci2_udc_orgate), 0));
+
+    /* UDC - USB 2.0 Device Controller */
+    object_property_set_link(OBJECT(&a->udc), "dram", OBJECT(s->dram_mr),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&a->udc), errp)) {
+        return;
+    }
+    aspeed_mmio_map(s->memory, SYS_BUS_DEVICE(&a->udc), 0,
+                    sc->memmap[ASPEED_DEV_UDC]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&a->udc), 0,
+                       qdev_get_gpio_in(DEVICE(&a->ehci2_udc_orgate), 1));
 
     /* SDMC - SDRAM Memory Controller */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdmc), errp)) {
@@ -710,6 +761,19 @@ static void aspeed_soc_ast2600_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->hace), 0,
                        aspeed_soc_ast2600_get_irq(s, ASPEED_DEV_HACE));
 
+    /* ACRY */
+    object_property_set_link(OBJECT(&s->acry), "dram", OBJECT(s->dram_mr),
+                             &error_abort);
+    object_property_set_link(OBJECT(&s->acry), "sram", OBJECT(&s->sram[1]),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->acry), errp)) {
+        return;
+    }
+    aspeed_mmio_map(s->memory, SYS_BUS_DEVICE(&s->acry), 0,
+                    sc->memmap[ASPEED_DEV_ACRY]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->acry), 0,
+                       aspeed_soc_ast2600_get_irq(s, ASPEED_DEV_ACRY));
+
     /* I3C */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->i3c), errp)) {
         return;
@@ -765,6 +829,7 @@ static void aspeed_soc_ast2600_class_init(ObjectClass *oc, const void *data)
     sc->valid_cpu_types = valid_cpu_types;
     sc->silicon_rev  = AST2600_A3_SILICON_REV;
     sc->sram_size[0] = 0x16400;
+    sc->sram_size[1] = 64 * KiB; /* ACRY SRAM */
     sc->spis_num     = 2;
     sc->ehcis_num    = 2;
     sc->wdts_num     = 4;

@@ -18,12 +18,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# owner=jsnow@redhat.com
 
 import iotests
 from iotests import log
 
-iotests.script_initialize(supported_fmts=['generic'])
+iotests.script_initialize(supported_fmts=['generic'],
+                          require_hmp=True)
 size = 64 * 1024 * 1024
 granularity = 64 * 1024
 

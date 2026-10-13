@@ -19,8 +19,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=kwolf@redhat.com
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -41,6 +39,7 @@ _supported_fmt qcow2
 _supported_proto file fuse
 _require_drivers null-co
 _require_devices virtio-scsi-pci
+_require_hmp
 
 if [ "$QEMU_DEFAULT_MACHINE" != "pc" ]; then
     _notrun "Requires a PC machine"

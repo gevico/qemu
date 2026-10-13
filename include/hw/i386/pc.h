@@ -38,6 +38,11 @@ typedef struct PCMachineState {
     DeviceState *iommu;
     BusState *idebus[MAX_IDE_BUS];
 
+    Object *alias_pcspk;
+    Object *alias_rtc_time;
+    Object *alias_pflash0;
+    Object *alias_pflash1;
+
     /* Configuration options: */
     uint64_t max_ram_below_4g;
     OnOffAuto vmport;
@@ -209,6 +214,9 @@ void pc_system_parse_ovmf_flash(uint8_t *flash_ptr, size_t flash_size);
 /* sgx.c */
 void pc_machine_init_sgx_epc(PCMachineState *pcms);
 
+extern GlobalProperty pc_compat_11_1[];
+extern const size_t pc_compat_11_1_len;
+
 extern GlobalProperty pc_compat_11_0[];
 extern const size_t pc_compat_11_0_len;
 
@@ -272,7 +280,7 @@ extern const size_t pc_compat_4_2_len;
 extern GlobalProperty pc_compat_4_1[];
 extern const size_t pc_compat_4_1_len;
 
-#define DEFINE_PC_MACHINE(suffix, namestr, initfn, optsfn) \
+#define DEFINE_PC_MACHINE_EXTENDED(suffix, namestr, initfn, optsfn, issecure) \
     static void pc_machine_##suffix##_class_init(ObjectClass *oc, \
                                                  const void *data) \
     { \
@@ -284,12 +292,21 @@ extern const size_t pc_compat_4_1_len;
         .name       = namestr TYPE_MACHINE_SUFFIX, \
         .parent     = TYPE_PC_MACHINE, \
         .class_init = pc_machine_##suffix##_class_init, \
+        .secure     = issecure, \
     }; \
     static void pc_machine_init_##suffix(void) \
     { \
         type_register_static(&pc_machine_type_##suffix); \
     } \
     type_init(pc_machine_init_##suffix)
+
+/* Implicitly insecure */
+#define DEFINE_PC_MACHINE(suffix, namestr, initfn, optsfn) \
+    DEFINE_PC_MACHINE_EXTENDED(suffix, namestr, initfn, optsfn, false)
+
+#define DEFINE_SECURE_PC_MACHINE(suffix, namestr, initfn, optsfn) \
+    DEFINE_PC_MACHINE_EXTENDED(suffix, namestr, initfn, optsfn, true)
+
 
 #define DEFINE_PC_VER_MACHINE(namesym, namestr, initfn, isdefault, malias, ...) \
     static void MACHINE_VER_SYM(init, namesym, __VA_ARGS__)( \

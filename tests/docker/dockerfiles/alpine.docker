@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTO-GENERATED
 #
-#  $ lcitool dockerfile --layers all alpine-323 qemu
+#  $ lcitool dockerfile --layers all --host-arch x86_64 alpine-323 qemu
 #
 # https://gitlab.com/libvirt/libvirt-ci
 
@@ -84,13 +84,11 @@ RUN apk update && \
         pkgconf \
         pulseaudio-dev \
         py3-numpy \
-        py3-pillow \
         py3-pip \
         py3-setuptools \
         py3-sphinx \
         py3-sphinx_rtd_theme \
         py3-wheel \
-        py3-yaml \
         python3 \
         rpm2cpio \
         rust \

@@ -44,6 +44,7 @@
 #include "target/s390x/kvm/pv.h"
 #include "migration/blocker.h"
 #include "qapi/visitor.h"
+#include "qapi/qapi-visit-machine-s390x.h"
 #include "hw/s390x/cpu-topology.h"
 #include "kvm/kvm_s390x.h"
 #include "hw/virtio/virtio-md-pci.h"
@@ -342,8 +343,8 @@ static void ccw_init(MachineState *machine)
 
 }
 
-static void s390_cpu_plug(HotplugHandler *hotplug_dev,
-                        DeviceState *dev, Error **errp)
+static void s390_cpu_plug(const HotplugHandler *hotplug_dev,
+                          DeviceState *dev, Error **errp)
 {
     ERRP_GUARD();
     MachineState *ms = MACHINE(hotplug_dev);
@@ -607,7 +608,7 @@ out_lock:
     bql_lock();
 }
 
-static void s390_machine_device_pre_plug(HotplugHandler *hotplug_dev,
+static void s390_machine_device_pre_plug(const HotplugHandler *hotplug_dev,
                                          DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_MD_CCW)) {
@@ -617,7 +618,7 @@ static void s390_machine_device_pre_plug(HotplugHandler *hotplug_dev,
     }
 }
 
-static void s390_machine_device_plug(HotplugHandler *hotplug_dev,
+static void s390_machine_device_plug(const HotplugHandler *hotplug_dev,
                                      DeviceState *dev, Error **errp)
 {
     S390CcwMachineState *s390ms = S390_CCW_MACHINE(hotplug_dev);
@@ -647,7 +648,7 @@ static void s390_machine_device_plug(HotplugHandler *hotplug_dev,
     }
 }
 
-static void s390_machine_device_unplug_request(HotplugHandler *hotplug_dev,
+static void s390_machine_device_unplug_request(const HotplugHandler *hotplug_dev,
                                                DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_CPU)) {
@@ -661,7 +662,7 @@ static void s390_machine_device_unplug_request(HotplugHandler *hotplug_dev,
     }
 }
 
-static void s390_machine_device_unplug(HotplugHandler *hotplug_dev,
+static void s390_machine_device_unplug(const HotplugHandler *hotplug_dev,
                                        DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_MD_CCW)) {
@@ -714,8 +715,8 @@ static const CPUArchIdList *s390_possible_cpu_arch_ids(MachineState *ms)
     return ms->possible_cpus;
 }
 
-static HotplugHandler *s390_get_hotplug_handler(MachineState *machine,
-                                                DeviceState *dev)
+static const HotplugHandler *s390_get_hotplug_handler(MachineState *machine,
+                                                      DeviceState *dev)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_CPU) ||
         object_dynamic_cast(OBJECT(dev), TYPE_VIRTIO_MD_CCW) ||
@@ -725,11 +726,9 @@ static HotplugHandler *s390_get_hotplug_handler(MachineState *machine,
     return NULL;
 }
 
-static void s390_nmi(NMIState *n, int cpu_index, Error **errp)
+static void s390_nmi(NMIState *ns)
 {
-    CPUState *cs = qemu_get_cpu(cpu_index);
-
-    s390_cpu_restart(S390_CPU(cs));
+    s390_cpu_restart(S390_CPU(first_cpu));
 }
 
 static inline bool machine_get_aes_key_wrap(Object *obj, Error **errp)
@@ -788,6 +787,64 @@ static void machine_set_loadparm(Object *obj, Visitor *v,
     g_free(val);
 }
 
+static void machine_get_boot_certs(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+    BootCertificatesList **certs = &ms->boot_certs;
+
+    visit_type_BootCertificatesList(v, name, certs, errp);
+}
+
+static void machine_set_boot_certs(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+{
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_GET_CLASS(obj);
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+    BootCertificatesList *cert_list = NULL;
+
+    if (!s390mc->use_certs) {
+        error_setg(errp, "boot-certs is not supported by this machine version");
+        return;
+    }
+
+    visit_type_BootCertificatesList(v, name, &cert_list, errp);
+    if (!cert_list) {
+        return;
+    }
+
+    ms->boot_certs = cert_list;
+}
+
+static inline bool machine_get_secure_boot(Object *obj, Error **errp)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+
+    return ms->secure_boot;
+}
+
+static inline void machine_set_secure_boot(Object *obj, bool value,
+                                            Error **errp)
+{
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_GET_CLASS(obj);
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+
+    if (!s390mc->use_secure) {
+        error_setg(errp, "secure-boot is not supported by this machine version");
+        return;
+    }
+
+    ms->secure_boot = value;
+}
+
+static inline bool machine_get_pv(Object *obj, Error **errp)
+{
+    S390CcwMachineState *ms = S390_CCW_MACHINE(obj);
+
+    return ms->pv;
+}
+
  /*
   * S390x-specific global compatibility properties.
   *
@@ -813,6 +870,8 @@ static void ccw_machine_class_init(ObjectClass *oc, const void *data)
 
     s390mc->max_threads = 1;
     s390mc->use_cpi = true;
+    s390mc->use_certs = true;
+    s390mc->use_secure = true;
     mc->reset = s390_machine_reset;
     mc->block_default_type = IF_VIRTIO;
     mc->no_cdrom = 1;
@@ -832,7 +891,7 @@ static void ccw_machine_class_init(ObjectClass *oc, const void *data)
     hc->plug = s390_machine_device_plug;
     hc->unplug_request = s390_machine_device_unplug_request;
     hc->unplug = s390_machine_device_unplug;
-    nc->nmi_monitor_handler = s390_nmi;
+    nc->raise_nmi = s390_nmi;
     mc->default_ram_id = "s390.ram";
     mc->default_nic = "virtio-net-ccw";
     dsi->qmp_dump_skeys = s390_qmp_dump_skeys;
@@ -856,6 +915,23 @@ static void ccw_machine_class_init(ObjectClass *oc, const void *data)
             "Up to 8 chars in set of [A-Za-z0-9. ] (lower case chars converted"
             " to upper case) to pass to machine loader, boot manager,"
             " and guest kernel");
+
+    object_class_property_add(oc, "boot-certs", "BootCertificatesList",
+                              machine_get_boot_certs, machine_set_boot_certs, NULL, NULL);
+    object_class_property_set_description(oc, "boot-certs",
+            "provide paths to a directory and/or a certificate file for secure boot");
+
+    object_class_property_add_bool(oc, "secure-boot",
+                                   machine_get_secure_boot,
+                                   machine_set_secure_boot);
+    object_class_property_set_description(oc, "secure-boot",
+            "enable/disable secure boot");
+
+    object_class_property_add_bool(oc, "pv",
+                                   machine_get_pv,
+                                   NULL);
+    object_class_property_set_description(oc, "pv",
+            "true while the guest runs in protected virtualization mode (read-only)");
 }
 
 static inline void s390_machine_initfn(Object *obj)
@@ -925,14 +1001,31 @@ static const TypeInfo ccw_machine_info = {
     DEFINE_CCW_MACHINE_IMPL(false, major, minor)
 
 
+static void ccw_machine_11_2_instance_options(MachineState *machine)
+{
+}
+
+static void ccw_machine_11_2_class_options(MachineClass *mc)
+{
+}
+DEFINE_CCW_MACHINE_AS_LATEST(11, 2);
+
 static void ccw_machine_11_1_instance_options(MachineState *machine)
 {
+    ccw_machine_11_2_instance_options(machine);
 }
 
 static void ccw_machine_11_1_class_options(MachineClass *mc)
 {
+    S390CcwMachineClass *s390mc = S390_CCW_MACHINE_CLASS(mc);
+
+    s390mc->use_certs = false;
+    s390mc->use_secure = false;
+
+    ccw_machine_11_2_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_1, hw_compat_11_1_len);
 }
-DEFINE_CCW_MACHINE_AS_LATEST(11, 1);
+DEFINE_CCW_MACHINE(11, 1);
 
 static void ccw_machine_11_0_instance_options(MachineState *machine)
 {

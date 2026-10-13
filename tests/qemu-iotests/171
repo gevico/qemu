@@ -20,8 +20,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=tgolembi@redhat.com
 
 seq=`basename $0`
 echo "QA output created by $seq"
@@ -188,7 +186,7 @@ img_offset=512
 img_size=512
 _make_test_img $size
 (
-$QEMU_IO "$(img_json)"  <<EOT
+$QEMU_IO "$(img_json)" 2>&1 <<EOT
 write -P 0x0a 0 512
 write -P 0x0a 511 1
 write -P 0x0a 512 1

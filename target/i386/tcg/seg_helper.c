@@ -1411,11 +1411,12 @@ void helper_load_seg(CPUX86State *env, int seg_reg, int selector)
 
     selector &= 0xffff;
     cpl = env->hflags & HF_CPL_MASK;
+    rpl = selector & 3;
     if ((selector & 0xfffc) == 0) {
         /* null selector case */
         if (seg_reg == R_SS
 #ifdef TARGET_X86_64
-            && (!(env->hflags & HF_CS64_MASK) || cpl == 3)
+            && (!(env->hflags & HF_CS64_MASK) || cpl == 3 || cpl != rpl)
 #endif
             ) {
             raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
@@ -1439,7 +1440,6 @@ void helper_load_seg(CPUX86State *env, int seg_reg, int selector)
         if (!(e2 & DESC_S_MASK)) {
             raise_exception_err_ra(env, EXCP0D_GPF, selector & 0xfffc, GETPC());
         }
-        rpl = selector & 3;
         dpl = (e2 >> DESC_DPL_SHIFT) & 3;
         if (seg_reg == R_SS) {
             /* must be writable segment */
@@ -2077,7 +2077,8 @@ static inline void helper_ret_protected(CPUX86State *env, int shift,
             new_cs = popl(&sa) & 0xffff;
             if (is_iret) {
                 new_eflags = popl(&sa);
-                if (new_eflags & VM_MASK) {
+                bool allow_vm86 = (cpl == 0) && !(env->hflags & HF_LMA_MASK);
+                if ((new_eflags & VM_MASK) && allow_vm86) {
                     goto return_to_vm86;
                 }
             }

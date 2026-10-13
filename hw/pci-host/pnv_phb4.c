@@ -1727,7 +1727,7 @@ static void pnv_phb4_root_bus_get_prop(Object *obj, Visitor *v,
                                        void *opaque, Error **errp)
 {
     PnvPHB4RootBus *bus = PNV_PHB4_ROOT_BUS(obj);
-    uint64_t value = 0;
+    uint32_t value = 0;
 
     if (strcmp(name, "phb-id") == 0) {
         value = bus->phb_id;
@@ -1735,7 +1735,7 @@ static void pnv_phb4_root_bus_get_prop(Object *obj, Visitor *v,
         value = bus->chip_id;
     }
 
-    visit_type_size(v, name, &value, errp);
+    visit_type_uint32(v, name, &value, errp);
 }
 
 static void pnv_phb4_root_bus_set_prop(Object *obj, Visitor *v,
@@ -1744,9 +1744,9 @@ static void pnv_phb4_root_bus_set_prop(Object *obj, Visitor *v,
 
 {
     PnvPHB4RootBus *bus = PNV_PHB4_ROOT_BUS(obj);
-    uint64_t value;
+    uint32_t value;
 
-    if (!visit_type_size(v, name, &value, errp)) {
+    if (!visit_type_uint32(v, name, &value, errp)) {
         return;
     }
 
@@ -1761,12 +1761,12 @@ static void pnv_phb4_root_bus_class_init(ObjectClass *klass, const void *data)
 {
     BusClass *k = BUS_CLASS(klass);
 
-    object_class_property_add(klass, "phb-id", "int",
+    object_class_property_add(klass, "phb-id", "uint32",
                               pnv_phb4_root_bus_get_prop,
                               pnv_phb4_root_bus_set_prop,
                               NULL, NULL);
 
-    object_class_property_add(klass, "chip-id", "int",
+    object_class_property_add(klass, "chip-id", "uint32",
                               pnv_phb4_root_bus_get_prop,
                               pnv_phb4_root_bus_set_prop,
                               NULL, NULL);

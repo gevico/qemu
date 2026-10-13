@@ -26,7 +26,6 @@
 #include "qemu/datadir.h"
 #include "hw/core/sysbus.h"
 #include "hw/arm/boot.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/misc/arm_sysctl.h"
 #include "hw/net/lan9118.h"
 #include "hw/i2c/i2c.h"
@@ -363,16 +362,9 @@ static void a15_daughterboard_init(VexpressMachineState *vms,
     MachineState *machine = MACHINE(vms);
     MemoryRegion *sysmem = get_system_memory();
 
-    {
-        /* We have to use a separate 64 bit variable here to avoid the gcc
-         * "comparison is always false due to limited range of data type"
-         * warning if we are on a host where ram_addr_t is 32 bits.
-         */
-        uint64_t rsz = ram_size;
-        if (rsz > (30ULL * 1024 * 1024 * 1024)) {
-            error_report("vexpress-a15: cannot model more than 30GB RAM");
-            exit(1);
-        }
+    if (ram_size > (30ULL * 1024 * 1024 * 1024)) {
+        error_report("vexpress-a15: cannot model more than 30GB RAM");
+        exit(1);
     }
 
     /* RAM is from 0x80000000 upwards; there is no low-memory alias for it. */
@@ -850,7 +842,6 @@ static const TypeInfo vexpress_a9_info = {
     .parent = TYPE_VEXPRESS_MACHINE,
     .class_init = vexpress_a9_class_init,
     .instance_init = vexpress_a9_instance_init,
-    .interfaces = arm_machine_interfaces,
 };
 
 static const TypeInfo vexpress_a15_info = {
@@ -858,7 +849,6 @@ static const TypeInfo vexpress_a15_info = {
     .parent = TYPE_VEXPRESS_MACHINE,
     .class_init = vexpress_a15_class_init,
     .instance_init = vexpress_a15_instance_init,
-    .interfaces = arm_machine_interfaces,
 };
 
 static void vexpress_machine_init(void)

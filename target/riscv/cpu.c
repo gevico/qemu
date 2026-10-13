@@ -39,6 +39,7 @@
 #include "system/tcg.h"
 #include "kvm/kvm_riscv.h"
 #include "tcg/tcg-cpu.h"
+#include "disas/capstone.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "target/riscv/tcg/debug.h"
 #endif
@@ -164,7 +165,7 @@ const RISCVIsaExtData isa_edata_arr[] = {
     ISA_EXT_DATA_ENTRY(zicboz, PRIV_VERSION_1_12_0, ext_zicboz),
     ISA_INTERNAL_EXT_DATA_ENTRY(ziccamoa, PRIV_VERSION_1_11_0, has_priv_1_11),
     ISA_INTERNAL_EXT_DATA_ENTRY(ziccif, PRIV_VERSION_1_11_0, has_priv_1_11),
-    ISA_INTERNAL_EXT_DATA_ENTRY(zicclsm, PRIV_VERSION_1_11_0, has_priv_1_11),
+    ISA_EXT_DATA_ENTRY(zicclsm, PRIV_VERSION_1_11_0, ext_zicclsm),
     ISA_EXT_DATA_ENTRY(ziccrse, PRIV_VERSION_1_11_0, ext_ziccrse),
     ISA_EXT_DATA_ENTRY(zicfilp, PRIV_VERSION_1_12_0, ext_zicfilp),
     ISA_EXT_DATA_ENTRY(zicfiss, PRIV_VERSION_1_13_0, ext_zicfiss),
@@ -247,7 +248,7 @@ const RISCVIsaExtData isa_edata_arr[] = {
     ISA_EXT_DATA_ENTRY(zvkt, PRIV_VERSION_1_12_0, ext_zvkt),
     ISA_EXT_DATA_ENTRY(zhinx, PRIV_VERSION_1_12_0, ext_zhinx),
     ISA_EXT_DATA_ENTRY(zhinxmin, PRIV_VERSION_1_12_0, ext_zhinxmin),
-    ISA_EXT_DATA_ENTRY(sdtrig, PRIV_VERSION_1_12_0, debug),
+    ISA_EXT_DATA_ENTRY(sdtrig, PRIV_VERSION_1_12_0, ext_sdtrig),
     ISA_INTERNAL_EXT_DATA_ENTRY(shcounterenw, PRIV_VERSION_1_12_0,
                                 has_priv_1_12),
     ISA_INTERNAL_EXT_DATA_ENTRY(sha, PRIV_VERSION_1_12_0, ext_sha),
@@ -650,6 +651,9 @@ static void riscv_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
+    bool rv32 = riscv_cpu_is_32bit(cpu);
+    int width = rv32 ? 8 : 16;
+    uint64_t mask = rv32 ? UINT32_MAX : UINT64_MAX;
     int i, j;
     uint8_t *p;
 
@@ -664,7 +668,7 @@ static void riscv_cpu_dump_state(CPUState *cs, FILE *f, int flags)
         qemu_fprintf(f, " %-13s %d\n", "elp", env->elp);
     }
 #endif
-    qemu_fprintf(f, " %-13s %" PRIx64 "\n", "pc", env->pc);
+    qemu_fprintf(f, " %-13s %0*" PRIx64 "\n", "pc", width, env->pc & mask);
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
     for (i = 0; i < ARRAY_SIZE(csr_ops); i++) {
         int csrno = i;
@@ -691,8 +695,8 @@ static void riscv_cpu_dump_state(CPUState *cs, FILE *f, int flags)
 #endif
 
     for (i = 0; i < 32; i++) {
-        qemu_fprintf(f, " %-8s %" PRIx64,
-                     riscv_int_regnames[i], env->gpr[i]);
+        qemu_fprintf(f, " %-8s %0*" PRIx64,
+                     riscv_int_regnames[i], width, env->gpr[i] & mask);
         if ((i & 3) == 3) {
             qemu_fprintf(f, "\n");
         }
@@ -865,7 +869,7 @@ uint8_t riscv_cpu_default_priority(int irq)
 
 int riscv_cpu_pending_to_irq(CPURISCVState *env,
                              int extirq, unsigned int extirq_def_prio,
-                             uint64_t pending, uint8_t *iprio)
+                             uint64_t pending, const uint8_t *iprio)
 {
     int irq, best_irq = RISCV_EXCP_NONE;
     unsigned int prio, best_prio = UINT_MAX;
@@ -1061,6 +1065,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
 #else
     env->priv = PRV_U;
     env->senvcfg = 0;
+    /*
+     * Match the user-mode view of a typical firmware/kernel setup where
+     * cbo.zero is enabled for user mode; the CBCFE/CBIE bits stay zero,
+     * so the cache-management operations remain illegal in user mode.
+     */
+    if (riscv_cpu_cfg(env)->ext_zicboz) {
+        env->senvcfg |= SENVCFG_CBZE;
+    }
     env->menvcfg = 0;
 #endif /* !CONFIG_USER_ONLY */
 
@@ -1072,6 +1084,9 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
     env->xl = riscv_cpu_mxl(env);
     cs->exception_index = RISCV_EXCP_NONE;
     env->load_res = -1;
+#ifdef CONFIG_USER_ONLY
+    env->load_res_size = 0;
+#endif
     set_default_nan_mode(1, &env->fp_status);
     /* Default NaN value: sign bit clear, frac msb set */
     set_float_default_nan_pattern(0b01000000, &env->fp_status);
@@ -1079,7 +1094,7 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
 
 #ifndef CONFIG_USER_ONLY
 #ifdef CONFIG_TCG
-    if (cpu->cfg.debug) {
+    if (cpu->cfg.debug || cpu->cfg.ext_sdtrig) {
         riscv_trigger_reset_hold(env);
     }
 #endif
@@ -1099,6 +1114,7 @@ static void riscv_cpu_disas_set_info(const CPUState *s, disassemble_info *info)
 {
     const RISCVCPU *cpu = RISCV_CPU(s);
     const CPURISCVState *env = &cpu->env;
+    int cap_mode;
 
     info->target_info = &cpu->cfg;
 
@@ -1111,16 +1127,93 @@ static void riscv_cpu_disas_set_info(const CPUState *s, disassemble_info *info)
     switch (env->xl) {
     case MXL_RV32:
         info->print_insn = print_insn_riscv32;
+        cap_mode = CS_MODE_RISCV32;
         break;
     case MXL_RV64:
         info->print_insn = print_insn_riscv64;
+        cap_mode = CS_MODE_RISCV64;
         break;
     case MXL_RV128:
         info->print_insn = print_insn_riscv128;
-        break;
+        /* capstone v6 doesn't support RV128 */
+        return;
     default:
         g_assert_not_reached();
     }
+
+    info->cap_arch = CS_ARCH_RISCV;
+    info->cap_insn_unit = 4;
+    info->cap_insn_split = 4;
+
+    /*
+     * Capstone compresses some features together. See RISCV_getFeatureBits,
+     * which maps LLVM feature bits to capstone bits.
+     */
+    if (riscv_has_ext(env, RVC) || cpu->cfg.ext_zca) {
+        cap_mode |= CS_MODE_RISCV_C;
+    }
+    if (riscv_has_ext(env, RVF)) {
+        cap_mode |= CS_MODE_RISCV_FD;
+    }
+    if (riscv_has_ext(env, RVV)) {
+        cap_mode |= CS_MODE_RISCV_V;
+    }
+    if (cpu->cfg.ext_zfinx || cpu->cfg.ext_zdinx || cpu->cfg.ext_zhinx) {
+        cap_mode |= CS_MODE_RISCV_ZFINX;
+    }
+    if (cpu->cfg.ext_zcmp || cpu->cfg.ext_zcmt || cpu->cfg.ext_zce) {
+        cap_mode |= CS_MODE_RISCV_ZCMP_ZCMT_ZCE;
+    }
+    if (cpu->cfg.ext_zicfiss) {
+        cap_mode |= CS_MODE_RISCV_ZICFISS;
+    }
+    if (riscv_has_ext(env, RVE)) {
+        cap_mode |= CS_MODE_RISCV_E;
+    }
+    if (riscv_has_ext(env, RVA)) {
+        cap_mode |= CS_MODE_RISCV_A;
+    }
+    if (cpu->cfg.ext_xlrbr) {
+        cap_mode |= CS_MODE_RISCV_BITMANIP;
+    }
+    if (cpu->cfg.ext_zba) {
+        cap_mode |= CS_MODE_RISCV_ZBA;
+    }
+    if (cpu->cfg.ext_zbb) {
+        cap_mode |= CS_MODE_RISCV_ZBB;
+    }
+    if (cpu->cfg.ext_zbc) {
+        cap_mode |= CS_MODE_RISCV_ZBC;
+    }
+    if (cpu->cfg.ext_zbkb) {
+        cap_mode |= CS_MODE_RISCV_ZBKB;
+    }
+    if (cpu->cfg.ext_zbkc) {
+        cap_mode |= CS_MODE_RISCV_ZBKC;
+    }
+    if (cpu->cfg.ext_zbkx) {
+        cap_mode |= CS_MODE_RISCV_ZBKX;
+    }
+    if (cpu->cfg.ext_zbs) {
+        cap_mode |= CS_MODE_RISCV_ZBS;
+    }
+    if (cpu->cfg.ext_xtheadba ||
+        cpu->cfg.ext_xtheadbb ||
+        cpu->cfg.ext_xtheadbs ||
+        cpu->cfg.ext_xtheadcmo ||
+        cpu->cfg.ext_xtheadcondmov ||
+        cpu->cfg.ext_xtheadfmemidx ||
+        cpu->cfg.ext_xtheadfmv ||
+        cpu->cfg.ext_xtheadmac ||
+        cpu->cfg.ext_xtheadmemidx ||
+        cpu->cfg.ext_xtheadmempair ||
+        cpu->cfg.ext_xtheadsync) {
+        cap_mode |= CS_MODE_RISCV_THEAD;
+    }
+    if (cpu->cfg.ext_XVentanaCondOps) {
+        cap_mode |= CS_MODE_RISCV_VENTANA;
+    }
+    info->cap_mode = cap_mode;
 }
 
 #ifndef CONFIG_USER_ONLY
@@ -1226,7 +1319,7 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
     RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
 
-    cpu_exec_realizefn(cs, &local_err);
+    cpu_common_realize(cs, &local_err);
     if (local_err != NULL) {
         error_propagate(errp, local_err);
         return;
@@ -1241,7 +1334,7 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
     riscv_cpu_register_gdb_regs_for_features(cs);
 
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
-    if (cpu->cfg.debug) {
+    if (cpu->cfg.debug || cpu->cfg.ext_sdtrig) {
         riscv_trigger_realize(&cpu->env);
     }
 #endif
@@ -1258,7 +1351,7 @@ static void riscv_cpu_unrealize(DeviceState *dev)
 #if defined(CONFIG_TCG) && !defined(CONFIG_USER_ONLY)
     RISCVCPU *cpu = RISCV_CPU(dev);
 
-    if (cpu->cfg.debug) {
+    if (cpu->cfg.debug || cpu->cfg.ext_sdtrig) {
         riscv_trigger_unrealize(&cpu->env);
     }
 #endif
@@ -1597,7 +1690,7 @@ static void prop_pmu_num_get(Object *obj, Visitor *v, const char *name,
 }
 
 static const PropertyInfo prop_pmu_num = {
-    .type = "int8",
+    .type = "uint8",
     .description = "pmu-num",
     .get = prop_pmu_num_get,
     .set = prop_pmu_num_set,
@@ -1633,13 +1726,13 @@ static void prop_pmu_mask_set(Object *obj, Visitor *v, const char *name,
 static void prop_pmu_mask_get(Object *obj, Visitor *v, const char *name,
                              void *opaque, Error **errp)
 {
-    uint8_t pmu_mask = RISCV_CPU(obj)->cfg.pmu_mask;
+    uint32_t pmu_mask = RISCV_CPU(obj)->cfg.pmu_mask;
 
-    visit_type_uint8(v, name, &pmu_mask, errp);
+    visit_type_uint32(v, name, &pmu_mask, errp);
 }
 
 static const PropertyInfo prop_pmu_mask = {
-    .type = "int8",
+    .type = "uint32",
     .description = "pmu-mask",
     .get = prop_pmu_mask_get,
     .set = prop_pmu_mask_set,
@@ -1782,6 +1875,7 @@ static void prop_pmp_granularity_get(Object *obj, Visitor *v, const char *name,
 }
 
 static const PropertyInfo prop_pmp_granularity = {
+    .type = "uint32",
     .description = "pmp-granularity",
     .get = prop_pmp_granularity_get,
     .set = prop_pmp_granularity_set,
@@ -2237,6 +2331,7 @@ static RISCVCPUProfile RVA22U64 = {
         CPU_CFG_OFFSET(ext_zkt), CPU_CFG_OFFSET(ext_zicntr),
         CPU_CFG_OFFSET(ext_zihpm), CPU_CFG_OFFSET(ext_zicbom),
         CPU_CFG_OFFSET(ext_zicbop), CPU_CFG_OFFSET(ext_zicboz),
+        CPU_CFG_OFFSET(ext_zicclsm),
 
         /* mandatory named features for this profile */
         CPU_CFG_OFFSET(ext_zic64b),
@@ -2834,6 +2929,11 @@ RISCVCPUImpliedExtsRule *riscv_multi_ext_implied_rules[] = {
 };
 
 static const Property riscv_cpu_properties[] = {
+    /*
+     * The 'debug' flag enables support for the legacy Debug
+     * 0.13 spec.  In case cpu->ext.ext_sdtrig is also enabled
+     * the CPU will enable Debug 1.0 instead.
+     */
     DEFINE_PROP_BOOL("debug", RISCVCPU, cfg.debug, true),
     DEFINE_PROP_BOOL("big-endian", RISCVCPU, cfg.big_endian, false),
 
@@ -3055,7 +3155,13 @@ static void riscv_isa_string_ext(RISCVCPU *cpu, char **isa_str,
     char *new = *isa_str;
 
     for (edata = isa_edata_arr; edata && edata->name; edata++) {
-        if (isa_ext_is_enabled(cpu, edata->ext_enable_offset)) {
+        if (isa_ext_is_enabled(cpu, edata->ext_enable_offset)
+            /*
+             * We've been adding 'sdtrig' in riscv,isa for
+             * Debug 0.13 for awhile.  Until we decide to
+             * move away from it we'll keep doing it.
+             */
+            || (!g_strcmp0(edata->name, "sdtrig") && cpu->cfg.debug)) {
             new = g_strconcat(old, "_", edata->name, NULL);
             g_free(old);
             old = new;
@@ -3177,6 +3283,8 @@ static void riscv_cpu_instance_finalize(Object *obj)
     g_clear_pointer(&cpu->pmu_event_ctr_map, g_hash_table_destroy);
 #endif
     g_clear_pointer(&cpu->user_options, g_hash_table_destroy);
+    g_clear_pointer(&cpu->misa_ext_user_opts, g_hash_table_destroy);
+    g_clear_pointer(&cpu->multi_ext_user_opts, g_hash_table_destroy);
 }
 
 static const TypeInfo riscv_cpu_type_infos[] = {
@@ -3268,6 +3376,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zicbom = true,
         .cfg.ext_zicbop = true,
         .cfg.ext_zicboz = true,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zicntr = true,
         .cfg.ext_zicsr = true,
         .cfg.ext_zifencei = true,
@@ -3340,6 +3449,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zicbom = true,
         .cfg.ext_zicbop = true,
         .cfg.ext_zicboz = true,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zicntr = true,
         .cfg.ext_zicsr = true,
         .cfg.ext_zifencei = true,
@@ -3426,6 +3536,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zbs = true,
         .cfg.ext_zkt = true,
         .cfg.ext_zbkc = true,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zicsr = true,
         .cfg.ext_zifencei = true,
         .cfg.ext_zihintpause = true,
@@ -3469,6 +3580,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .cfg.ext_zicbom = true,
         .cfg.ext_zicbop = true,
         .cfg.ext_zicboz = true,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zicntr = true,
         .cfg.ext_zicond = true,
         .cfg.ext_zicsr = true,
@@ -3518,6 +3630,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
 
         /* ISA extensions */
         .cfg.mmu = true,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zifencei = true,
         .cfg.ext_zicsr = true,
         .cfg.pmp = true,
@@ -3577,6 +3690,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
      * The RISC-V Instruction Set Manual: Volume I
      * Unprivileged Architecture
      */
+    .cfg.ext_zicclsm = true,
     .cfg.ext_zicntr = true,
     .cfg.ext_zihpm = true,
     .cfg.ext_zihintntl = true,
@@ -3633,6 +3747,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
         .misa_ext = RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU,
         .priv_spec = PRIV_VERSION_1_12_0,
         .cfg.max_satp_mode = VM_1_10_SV48,
+        .cfg.ext_zicclsm = true,
         .cfg.ext_zifencei = true,
         .cfg.ext_zicsr = true,
         .cfg.mmu = true,

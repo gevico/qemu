@@ -294,10 +294,12 @@ void qxl_spice_reset_cursor(PCIQXLDevice *qxl)
     qemu_mutex_lock(&qxl->track_lock);
     qxl->guest_cursor = 0;
     qemu_mutex_unlock(&qxl->track_lock);
+    qemu_mutex_lock(&qxl->ssd.lock);
     if (qxl->ssd.cursor) {
         cursor_unref(qxl->ssd.cursor);
     }
     qxl->ssd.cursor = cursor_builtin_hidden();
+    qemu_mutex_unlock(&qxl->ssd.lock);
 }
 
 static uint32_t qxl_crc32(const uint8_t *p, unsigned len)
@@ -1407,7 +1409,7 @@ static void qxl_reset_surfaces(PCIQXLDevice *d)
 /* can be also called from spice server thread context */
 static bool qxl_get_check_slot_offset(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
                                       uint32_t *s, uint64_t *o,
-                                      size_t size_requested)
+                                      size_t size_requested, bool report_bug)
 {
     uint64_t phys   = le64_to_cpu(pqxl);
     uint32_t slot   = (phys >> (64 -  8)) & 0xff;
@@ -1415,42 +1417,55 @@ static bool qxl_get_check_slot_offset(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
     uint64_t size_available;
 
     if (slot >= NUM_MEMSLOTS) {
-        qxl_set_guest_bug(qxl, "slot too large %d >= %d", slot,
-                          NUM_MEMSLOTS);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl, "slot too large %d >= %d", slot,
+                              NUM_MEMSLOTS);
+        }
         return false;
     }
     if (!qxl->guest_slots[slot].active) {
-        qxl_set_guest_bug(qxl, "inactive slot %d\n", slot);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl, "inactive slot %d\n", slot);
+        }
         return false;
     }
     if (offset < qxl->guest_slots[slot].delta) {
-        qxl_set_guest_bug(qxl,
-                          "slot %d offset %"PRIu64" < delta %"PRIu64"\n",
-                          slot, offset, qxl->guest_slots[slot].delta);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl,
+                              "slot %d offset %"PRIu64" < delta %"PRIu64"\n",
+                              slot, offset, qxl->guest_slots[slot].delta);
+        }
         return false;
     }
     offset -= qxl->guest_slots[slot].delta;
     if (offset > qxl->guest_slots[slot].size) {
-        qxl_set_guest_bug(qxl,
-                          "slot %d offset %"PRIu64" > size %"PRIu64"\n",
-                          slot, offset, qxl->guest_slots[slot].size);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl,
+                              "slot %d offset %"PRIu64" > size %"PRIu64"\n",
+                              slot, offset, qxl->guest_slots[slot].size);
+        }
         return false;
     }
     size_available = memory_region_size(qxl->guest_slots[slot].mr);
     if (qxl->guest_slots[slot].offset + offset >= size_available) {
-        qxl_set_guest_bug(qxl,
-                          "slot %d offset %"PRIu64" > region size %"PRIu64"\n",
-                          slot, qxl->guest_slots[slot].offset + offset,
-                          size_available);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl,
+                              "slot %d offset %"PRIu64" > region size %"PRIu64
+                              "\n", slot,
+                              qxl->guest_slots[slot].offset + offset,
+                              size_available);
+        }
         return false;
     }
     size_available -= qxl->guest_slots[slot].offset + offset;
     if (size_requested > size_available) {
-        qxl_set_guest_bug(qxl,
-                          "slot %d offset %"PRIu64" size %zu: "
-                          "overrun by %"PRIu64" bytes\n",
-                          slot, offset, size_requested,
-                          size_requested - size_available);
+        if (report_bug) {
+            qxl_set_guest_bug(qxl,
+                              "slot %d offset %"PRIu64" size %zu: "
+                              "overrun by %"PRIu64" bytes\n",
+                              slot, offset, size_requested,
+                              size_requested - size_available);
+        }
         return false;
     }
 
@@ -1460,25 +1475,31 @@ static bool qxl_get_check_slot_offset(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
 }
 
 /* can be also called from spice server thread context */
-void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id,
-                    size_t size)
+static void *qxl_guest_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
+                                 size_t size, bool report_bug)
 {
     uint64_t offset;
     uint32_t slot;
-    void *ptr;
+    uint8_t *ptr;
 
+    if (!qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset, size,
+                                   report_bug)) {
+        return NULL;
+    }
+    ptr  = memory_region_get_ram_ptr(qxl->guest_slots[slot].mr);
+    ptr += qxl->guest_slots[slot].offset;
+    ptr += offset;
+    return ptr;
+}
+
+void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL pqxl, int group_id,
+                    size_t size)
+{
     switch (group_id) {
     case MEMSLOT_GROUP_HOST:
-        offset = le64_to_cpu(pqxl) & 0xffffffffffff;
-        return (void *)(intptr_t)offset;
+        return (void *)(intptr_t)(le64_to_cpu(pqxl) & 0xffffffffffff);
     case MEMSLOT_GROUP_GUEST:
-        if (!qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset, size)) {
-            return NULL;
-        }
-        ptr = memory_region_get_ram_ptr(qxl->guest_slots[slot].mr);
-        ptr += qxl->guest_slots[slot].offset;
-        ptr += offset;
-        return ptr;
+        return qxl_guest_phys2virt(qxl, pqxl, size, true);
     }
     return NULL;
 }
@@ -1489,6 +1510,47 @@ static void qxl_create_guest_primary_complete(PCIQXLDevice *qxl)
     qxl_render_resize(qxl);
 }
 
+/*
+ * Convert a SpiceSurfaceFormat to bytes per pixel and bits per pixel.
+ *
+ * Only valid for surface suitable for rendering.
+ */
+bool qxl_format_bpp(PCIQXLDevice *qxl, SpiceSurfaceFmt format,
+                    uint32_t *bytes_pp, uint32_t *bits_pp)
+{
+    uint32_t bypp = 4;
+    uint32_t bipp = 32;
+    bool ret = true;
+
+    switch (format) {
+    case SPICE_SURFACE_FMT_16_555:
+        bypp = 2;
+        bipp = 15;
+        break;
+    case SPICE_SURFACE_FMT_16_565:
+        bypp = 2;
+        bipp = 16;
+        break;
+    case SPICE_SURFACE_FMT_32_xRGB:
+    case SPICE_SURFACE_FMT_32_ARGB:
+        bypp = 4;
+        bipp = 32;
+        break;
+    default:
+        ret = false;
+        qxl_set_guest_bug(qxl, "%s: unhandled format: %x", __func__, format);
+    }
+
+    if (bytes_pp != NULL) {
+        *bytes_pp = bypp;
+    }
+    if (bits_pp != NULL) {
+        *bits_pp = bipp;
+    }
+
+    return ret;
+}
+
 static void qxl_create_guest_primary(PCIQXLDevice *qxl, int loadvm,
                                      qxl_async_io async)
 {
@@ -1496,6 +1558,7 @@ static void qxl_create_guest_primary(PCIQXLDevice *qxl, int loadvm,
     QXLSurfaceCreate *sc = &qxl->guest_primary.surface;
     uint32_t requested_height = le32_to_cpu(sc->height);
     int requested_stride = le32_to_cpu(sc->stride);
+    uint32_t bytes_pp;
 
     if (requested_stride == INT32_MIN ||
         abs(requested_stride) * (uint64_t)requested_height
@@ -1529,6 +1592,23 @@ static void qxl_create_guest_primary(PCIQXLDevice *qxl, int loadvm,
     if ((surface.stride & 0x3) != 0) {
         qxl_set_guest_bug(qxl, "primary surface stride = %d %% 4 != 0",
                           surface.stride);
+        return;
+    }
+
+    if (!qxl_format_bpp(qxl, surface.format, &bytes_pp, NULL)) {
+        return;
+    }
+
+    if (surface.width == 0 || surface.height == 0) {
+        qxl_set_guest_bug(qxl, "%s: zero dimension %ux%u",
+                          __func__, surface.width, surface.height);
+        return;
+    }
+
+    if ((uint64_t)surface.width * bytes_pp > abs(surface.stride)) {
+        qxl_set_guest_bug(qxl, "%s: stride too small for width:"
+                          " stride %d width %u bpp %u",
+                          __func__, surface.stride, surface.width, bytes_pp);
         return;
     }
 
@@ -1942,7 +2022,7 @@ static void qxl_dirty_one_surface(PCIQXLDevice *qxl, QXLPHYSICAL pqxl,
     bool rc;
 
     size = (uint64_t)height * abs(stride);
-    rc = qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset, size);
+    rc = qxl_get_check_slot_offset(qxl, pqxl, &slot, &offset, size, true);
     assert(rc == true);
     trace_qxl_surfaces_dirty(qxl->id, offset, size);
     qxl_set_dirty(qxl->guest_slots[slot].mr,
@@ -2310,6 +2390,37 @@ static void qxl_create_memslots(PCIQXLDevice *d)
     }
 }
 
+/*
+ * Validate a command tracked for loadvm replay before handing its guest
+ * address to spice-server.
+ */
+static bool qxl_loadvm_cmd_valid(PCIQXLDevice *d, QXLPHYSICAL data,
+                                 uint32_t type)
+{
+    switch (type) {
+    case QXL_CMD_SURFACE:
+        return qxl_guest_phys2virt(d, data,
+                                   sizeof(QXLSurfaceCmd), false) != NULL;
+
+    case QXL_CMD_CURSOR: {
+        QXLCursorCmd *cmd = qxl_guest_phys2virt(d, data, sizeof(QXLCursorCmd),
+                                                false);
+
+        if (!cmd) {
+            return false;
+        }
+        if (le32_to_cpu(cmd->type) == QXL_CURSOR_SET) {
+            return qxl_guest_phys2virt(d, le64_to_cpu(cmd->u.set.shape),
+                                       sizeof(QXLCursor), false) != NULL;
+        }
+        return true;
+    }
+
+    default:
+        g_assert_not_reached();
+    }
+}
+
 static int qxl_post_load(void *opaque, int version)
 {
     PCIQXLDevice* d = opaque;
@@ -2348,16 +2459,26 @@ static int qxl_post_load(void *opaque, int version)
             if (d->guest_surfaces.cmds[in] == 0) {
                 continue;
             }
+            if (!qxl_loadvm_cmd_valid(d, d->guest_surfaces.cmds[in],
+                                      QXL_CMD_SURFACE)) {
+                trace_qxl_post_load_stale_cmd(d->id, "surface",
+                                              d->guest_surfaces.cmds[in]);
+                continue;
+            }
             cmds[out].cmd.data = d->guest_surfaces.cmds[in];
             cmds[out].cmd.type = QXL_CMD_SURFACE;
             cmds[out].group_id = MEMSLOT_GROUP_GUEST;
             out++;
         }
         if (d->guest_cursor) {
-            cmds[out].cmd.data = d->guest_cursor;
-            cmds[out].cmd.type = QXL_CMD_CURSOR;
-            cmds[out].group_id = MEMSLOT_GROUP_GUEST;
-            out++;
+            if (qxl_loadvm_cmd_valid(d, d->guest_cursor, QXL_CMD_CURSOR)) {
+                cmds[out].cmd.data = d->guest_cursor;
+                cmds[out].cmd.type = QXL_CMD_CURSOR;
+                cmds[out].group_id = MEMSLOT_GROUP_GUEST;
+                out++;
+            } else {
+                trace_qxl_post_load_stale_cmd(d->id, "cursor", d->guest_cursor);
+            }
         }
         qxl_spice_loadvm_commands(d, cmds, out);
         g_free(cmds);

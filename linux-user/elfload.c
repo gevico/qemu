@@ -144,6 +144,10 @@ typedef abi_int         target_pid_t;
 #define EXSTACK_DEFAULT false
 #endif
 
+#ifndef elf_core_eflags
+#define elf_core_eflags(info) 0
+#endif
+
 /*
  * Provide fallback definitions that the target may omit.
  * One way or another, we'll get a link error if the setting of
@@ -1887,6 +1891,17 @@ static void fill_elf_note_phdr(struct elf_phdr *phdr, size_t sz, off_t offset)
     bswap_phdr(phdr, 1);
 }
 
+#ifdef HAVE_ELF_CORE_FPREGS
+static void fill_fpregset_note(void *data, CPUState *cpu)
+{
+    /* Fill locally and copy: note memory is only aligned to 4. */
+    target_elf_fpregset_t fpregs = {};
+
+    elf_core_copy_fpregs(&fpregs, cpu_env(cpu));
+    memcpy(data, &fpregs, sizeof(fpregs));
+}
+#endif
+
 static void fill_prstatus_note(void *data, CPUState *cpu, int signr)
 {
     /*
@@ -2117,7 +2132,7 @@ static int wmr_write_region(void *opaque, vaddr start,
 #endif
 static int elf_core_dump(int signr, const CPUArchState *env)
 {
-    const CPUState *cpu = env_cpu_const(env);
+    const CPUState *cpu = env_cpu(env);
     const TaskState *ts = (const TaskState *)get_task_state((CPUState *)cpu);
     struct rlimit dumpsize;
     CountAndSizeRegions css;
@@ -2166,6 +2181,9 @@ static int elf_core_dump(int signr, const CPUArchState *env)
     offset += size_note("CORE", ts->info->auxv_len);
     offset += size_note("CORE", sizeof(struct target_elf_prpsinfo));
     offset += size_note("CORE", sizeof(struct target_elf_prstatus)) * cpus;
+#ifdef HAVE_ELF_CORE_FPREGS
+    offset += size_note("CORE", sizeof(target_elf_fpregset_t)) * cpus;
+#endif
     note_size = offset - note_offset;
     data_offset = TARGET_PAGE_ALIGN(offset);
 
@@ -2198,7 +2216,8 @@ static int elf_core_dump(int signr, const CPUArchState *env)
 
         /* Create elf file header. */
         hptr = header;
-        fill_elf_header(hptr, css.count + 1, ELF_MACHINE, 0);
+        fill_elf_header(hptr, css.count + 1, ELF_MACHINE,
+                        elf_core_eflags(ts->info));
         hptr += sizeof(struct elfhdr);
 
         /* Create elf program headers. */
@@ -2222,6 +2241,11 @@ static int elf_core_dump(int signr, const CPUArchState *env)
             dptr = fill_note(&hptr, NT_PRSTATUS, "CORE",
                              sizeof(struct target_elf_prstatus));
             fill_prstatus_note(dptr, cpu_iter, cpu_iter == cpu ? signr : 0);
+#ifdef HAVE_ELF_CORE_FPREGS
+            dptr = fill_note(&hptr, NT_FPREGSET, "CORE",
+                             sizeof(target_elf_fpregset_t));
+            fill_fpregset_note(dptr, cpu_iter);
+#endif
         }
 
         if (dump_write(fd, header, data_offset) < 0) {

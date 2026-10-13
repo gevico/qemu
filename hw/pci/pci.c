@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "qemu/datadir.h"
 #include "qemu/units.h"
+#include "hw/acpi/pcihp.h"
 #include "hw/core/irq.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bridge.h"
@@ -187,6 +188,8 @@ static void pci_bus_realize(BusState *qbus, Error **errp)
     bus->machine_done.notify = pcibus_machine_done;
     qemu_add_machine_init_done_notifier(&bus->machine_done);
 
+    bus->acpi_pcihp_bsel_val = UINT32_MAX;
+
     vmstate_register_any(NULL, &vmstate_pcibus, bus);
 }
 
@@ -290,7 +293,9 @@ static void pci_bus_class_init(ObjectClass *klass, const void *data)
     ResettableClass *rc = RESETTABLE_CLASS(klass);
     FWCfgDataGeneratorClass *fwgc = FW_CFG_DATA_GENERATOR_CLASS(klass);
 
+#ifdef CONFIG_HMP
     k->print_dev = pcibus_dev_print;
+#endif
     k->get_dev_path = pcibus_get_dev_path;
     k->get_fw_dev_path = pcibus_get_fw_dev_path;
     k->realize = pci_bus_realize;
@@ -302,6 +307,10 @@ static void pci_bus_class_init(ObjectClass *klass, const void *data)
     pbc->numa_node = pcibus_numa_node;
 
     fwgc->get_data = pci_bus_fw_cfg_gen_data;
+
+    object_class_property_add_uint32_ptr(klass, ACPI_PCIHP_PROP_BSEL,
+                                         offsetof(PCIBus, acpi_pcihp_bsel_val),
+                                         OBJ_PROP_FLAG_READWRITE);
 }
 
 static const TypeInfo pci_bus_info = {
@@ -831,6 +840,8 @@ static int get_pci_config_device(QEMUFile *f, void *pv, size_t size,
     }
     memcpy(s->config, config, size);
 
+    memory_region_transaction_begin();
+
     pci_update_mappings(s);
     if (IS_PCI_BRIDGE(s)) {
         pci_bridge_update_mappings(PCI_BRIDGE(s));
@@ -838,6 +849,8 @@ static int get_pci_config_device(QEMUFile *f, void *pv, size_t size,
 
     pci_set_master(s, pci_get_word(s->config + PCI_COMMAND)
                       & PCI_COMMAND_MASTER);
+
+    memory_region_transaction_commit();
 
     g_free(config);
     return 0;
@@ -1733,6 +1746,8 @@ static void pci_update_mappings(PCIDevice *d)
     int i;
     pcibus_t new_addr;
 
+    memory_region_transaction_begin();
+
     for(i = 0; i < PCI_NUM_REGIONS; i++) {
         r = &d->io_regions[i];
 
@@ -1769,6 +1784,8 @@ static void pci_update_mappings(PCIDevice *d)
     }
 
     pci_update_vga(d);
+
+    memory_region_transaction_commit();
 }
 
 int pci_irq_disabled(PCIDevice *d)

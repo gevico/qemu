@@ -37,7 +37,6 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/bsa.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/char/cmsdk-apb-uart.h"
 #include "hw/i2c/arm_sbcon_i2c.h"
 #include "hw/intc/arm_gicv3.h"
@@ -59,15 +58,7 @@ typedef struct RAMInfo {
     int flags;
 } RAMInfo;
 
-/*
- * The MPS3 DDR is 3GiB, but on a 32-bit host QEMU doesn't permit
- * emulation of that much guest RAM, so artificially make it smaller.
- */
-#if HOST_LONG_BITS == 32
-#define MPS3_DDR_SIZE (1 * GiB)
-#else
 #define MPS3_DDR_SIZE (3 * GiB)
-#endif
 
 /*
  * Flag values:
@@ -635,7 +626,6 @@ static const TypeInfo mps3r_machine_types[] = {
         .name = TYPE_MPS3R_AN536_MACHINE,
         .parent = TYPE_MPS3R_MACHINE,
         .class_init = mps3r_an536_class_init,
-        .interfaces = arm_machine_interfaces,
     },
 };
 

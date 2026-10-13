@@ -14,7 +14,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "monitor/monitor.h"
+#include "qapi/util.h"
 #include "net/net.h"
 #include "clients.h"
 #include "hub.h"
@@ -199,26 +199,31 @@ NetClientState *net_hub_add_port(int hub_id, const char *name,
     return &port->nc;
 }
 
-/**
- * Print hub configuration
- */
-void net_hub_info(Monitor *mon)
+NetHubInfoList *net_hub_query_info(void)
 {
+    NetHubInfoList *head = NULL, **tail = &head;
     NetHub *hub;
-    NetHubPort *port;
 
     QLIST_FOREACH(hub, &hubs, next) {
-        monitor_printf(mon, "hub %d\n", hub->id);
+        NetHubInfo *hi = g_new0(NetHubInfo, 1);
+        NetHubPortInfoList **ptail = &hi->ports;
+        NetHubPort *port;
+
+        hi->id = hub->id;
+
         QLIST_FOREACH(port, &hub->ports, next) {
-            monitor_printf(mon, " \\ %s", port->nc.name);
+            NetHubPortInfo *pi = g_new0(NetHubPortInfo, 1);
+            pi->name = g_strdup(port->nc.name);
             if (port->nc.peer) {
-                monitor_printf(mon, ": ");
-                print_net_client(mon, port->nc.peer);
-            } else {
-                monitor_printf(mon, "\n");
+                pi->peer = net_client_info(port->nc.peer);
             }
+            QAPI_LIST_APPEND(ptail, pi);
         }
+
+        QAPI_LIST_APPEND(tail, hi);
     }
+
+    return head;
 }
 
 /**
@@ -294,12 +299,16 @@ void net_hub_check_clients(void)
 #ifdef CONFIG_PASST
             case NET_CLIENT_DRIVER_PASST:
 #endif
+#ifdef CONFIG_SLIRP
             case NET_CLIENT_DRIVER_USER:
+#endif
             case NET_CLIENT_DRIVER_TAP:
             case NET_CLIENT_DRIVER_SOCKET:
             case NET_CLIENT_DRIVER_STREAM:
             case NET_CLIENT_DRIVER_DGRAM:
+#ifdef CONFIG_VDE
             case NET_CLIENT_DRIVER_VDE:
+#endif
             case NET_CLIENT_DRIVER_VHOST_USER:
                 has_host_dev = 1;
                 break;

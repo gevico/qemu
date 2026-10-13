@@ -441,7 +441,7 @@ clang-system:
     CONFIGURE_ARGS: --cc=clang --cxx=clang++ --enable-ubsan
       --extra-cflags=-fno-sanitize-recover=undefined
     TARGETS: alpha-softmmu arm-softmmu m68k-softmmu mips64-softmmu s390x-softmmu
-    MAKE_CHECK_ARGS: check-qtest check-tcg
+    MAKE_CHECK_ARGS: check-qtest
 
 clang-user:
   extends: .native_build_job_template
@@ -659,6 +659,17 @@ build-tci:
       done
     - make check-tcg
 
+multi-target:
+  extends: .native_build_job_template
+  needs:
+    - job: amd64-debian-container
+  variables:
+    IMAGE: debian
+  script:
+    - ./configure
+    - make -C build tests/unit/test-multi-target
+    - ./build/tests/unit/test-multi-target
+
 # Check our reduced build configurations
 build-without-defaults:
   extends: .native_build_job_template
@@ -673,6 +684,7 @@ build-without-defaults:
       --disable-pie
       --disable-qom-cast-debug
       --disable-strip
+      --disable-hmp
       --target-list-exclude=aarch64-softmmu,mips64-softmmu,mipsel-softmmu,ppc64-softmmu,sh4el-softmmu,xtensa-softmmu,x86_64-softmmu
     MAKE_CHECK_ARGS: check
 

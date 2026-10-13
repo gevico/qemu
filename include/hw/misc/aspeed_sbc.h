@@ -17,7 +17,7 @@
 #define TYPE_ASPEED_AST10X0_SBC TYPE_ASPEED_SBC "-ast10x0"
 OBJECT_DECLARE_TYPE(AspeedSBCState, AspeedSBCClass, ASPEED_SBC)
 
-#define ASPEED_SBC_NR_REGS (0x93c >> 2)
+#define ASPEED_SBC_NR_REGS (0x1000 >> 2)
 
 #define QSR_AES                     BIT(27)
 #define QSR_RSA1024                 (0x0 << 12)
@@ -40,12 +40,16 @@ struct AspeedSBCState {
     uint32_t regs[ASPEED_SBC_NR_REGS];
 
     AspeedOTPState otp;
+
+    MemoryRegion *sram;
+    AddressSpace sram_as;
 };
 
 struct AspeedSBCClass {
     SysBusDeviceClass parent_class;
 
     bool has_otp;
+    bool has_ecdsa;
 };
 
 #endif /* ASPEED_SBC_H */

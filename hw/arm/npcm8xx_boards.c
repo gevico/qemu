@@ -19,7 +19,6 @@
 #include "chardev/char.h"
 #include "hw/core/boards.h"
 #include "hw/arm/npcm8xx.h"
-#include "hw/arm/machines-qom.h"
 #include "hw/core/cpu.h"
 #include "hw/core/loader.h"
 #include "hw/core/qdev.h"
@@ -198,7 +197,7 @@ static void npcm845_evb_init(MachineState *machine)
     npcm8xx_connect_flash(&soc->fiu[0], 0, "w25q256", drive_get(IF_MTD, 0, 0));
     npcm845_evb_i2c_init(soc);
     npcm845_evb_fan_init(NPCM8XX_MACHINE(machine), soc);
-    npcm8xx_load_kernel(machine, soc);
+    npcm8xx_load_kernel(machine, soc, &NPCM8XX_MACHINE(machine)->bootinfo);
 }
 
 static void npcm8xx_set_soc_type(NPCM8xxMachineClass *nmc, const char *type)
@@ -249,7 +248,6 @@ static const TypeInfo npcm8xx_machine_types[] = {
         .name           = MACHINE_TYPE_NAME("npcm845-evb"),
         .parent         = TYPE_NPCM8XX_MACHINE,
         .class_init     = npcm845_evb_machine_class_init,
-        .interfaces     = aarch64_machine_interfaces,
     },
 };
 

@@ -29,6 +29,7 @@
 #include <linux/kvm.h>
 #endif
 #include "tcg/tcg_loongarch.h"
+#include "disas/capstone.h"
 
 const char * const regnames[32] = {
     "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
@@ -57,12 +58,36 @@ static vaddr loongarch_cpu_get_pc(CPUState *cs)
 #ifndef CONFIG_USER_ONLY
 #include "hw/loongarch/virt.h"
 
-void loongarch_cpu_set_irq(void *opaque, int irq, int level)
+void loongarch_cpu_update_irq(LoongArchCPU *cpu)
 {
-    LoongArchCPU *cpu = opaque;
     CPULoongArchState *env = &cpu->env;
     CPUState *cs = CPU(cpu);
     CPUSysState *sys = env_sys(env);
+
+    if (FIELD_EX64(sys->CSR_ESTAT, CSR_ESTAT, IS)) {
+        cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+    } else {
+        cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+    }
+}
+
+static void loongarch_cpu_self_set_irq(CPUState *cs, run_on_cpu_data data)
+{
+    LoongArchCPU *cpu = LOONGARCH_CPU(cs);
+    CPULoongArchState *env = cpu_env(cs);
+    CPUSysState *sys = env_sys(env);
+    int irq, level;
+
+    irq = data.host_int & ~BIT(31);
+    level = (data.host_int >> 31) & 1;
+    sys->CSR_ESTAT = deposit64(sys->CSR_ESTAT, irq, 1, level != 0);
+    loongarch_cpu_update_irq(cpu);
+}
+
+void loongarch_cpu_set_irq(void *opaque, int irq, int level)
+{
+    LoongArchCPU *cpu = opaque;
+    CPUState *cs = CPU(cpu);
 
     if (irq < 0 || irq >= N_IRQS) {
         return;
@@ -71,12 +96,9 @@ void loongarch_cpu_set_irq(void *opaque, int irq, int level)
     if (kvm_enabled()) {
         kvm_loongarch_set_interrupt(cpu, irq, level);
     } else if (tcg_enabled()) {
-        sys->CSR_ESTAT = deposit64(sys->CSR_ESTAT, irq, 1, level != 0);
-        if (FIELD_EX64(sys->CSR_ESTAT, CSR_ESTAT, IS)) {
-            cpu_interrupt(cs, CPU_INTERRUPT_HARD);
-        } else {
-            cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
-        }
+        irq |= (level & 1) << 31;
+        async_run_on_cpu(cs, loongarch_cpu_self_set_irq,
+                         RUN_ON_CPU_HOST_INT(irq));
     }
 }
 
@@ -125,12 +147,6 @@ static void loongarch_la464_init_csr(DeviceState *dev)
         }
         set_csr_flag(LOONGARCH_CSR_IMPCTL1, CSRFL_UNUSED);
         set_csr_flag(LOONGARCH_CSR_IMPCTL2, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRCTL, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRINFO1, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRINFO2, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRENTRY, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRERA, CSRFL_UNUSED);
-        set_csr_flag(LOONGARCH_CSR_MERRSAVE, CSRFL_UNUSED);
         set_csr_flag(LOONGARCH_CSR_CTAG, CSRFL_UNUSED);
 
         for (i = env->perf_event_num; i < MAX_PERF_EVENTS; i++) {
@@ -442,31 +458,36 @@ static void loongarch_la132_initfn(Object *obj)
     cpu->ptw = ON_OFF_AUTO_OFF;
 }
 
-static void loongarch_max_initfn(Object *obj)
+static void loongarch_la664_initfn(Object *obj)
 {
     LoongArchCPU *cpu = LOONGARCH_CPU(obj);
-    /* '-cpu max': use it for max supported CPU features */
+    uint32_t data;
+
     loongarch_la464_initfn(obj);
 
+    cpu->env.cpucfg[2] = FIELD_DP32(cpu->env.cpucfg[2], CPUCFG2, HPTW, 1);
     cpu->ptw = ON_OFF_AUTO_AUTO;
-    if (tcg_enabled()) {
-        cpu->env.cpucfg[1] = FIELD_DP32(cpu->env.cpucfg[1], CPUCFG1, MSG_INT, 1);
-        cpu->msgint = ON_OFF_AUTO_AUTO;
+    cpu->env.cpucfg[1] = FIELD_DP32(cpu->env.cpucfg[1], CPUCFG1, MSG_INT, 1);
+    cpu->msgint = ON_OFF_AUTO_AUTO;
 
-        uint32_t data = cpu->env.cpucfg[2];
-        data = FIELD_DP32(data, CPUCFG2, HPTW, 1);
-        /* Enable LA v1.1 instructions */
-        data = FIELD_DP32(data, CPUCFG2, FRECIPE, 1);
-        data = FIELD_DP32(data, CPUCFG2, LAM_BH, 1);
-        data = FIELD_DP32(data, CPUCFG2, LAMCAS, 1);
-        data = FIELD_DP32(data, CPUCFG2, LLACQ_SCREL, 1);
-        data = FIELD_DP32(data, CPUCFG2, SCQ, 1);
-        cpu->env.cpucfg[2] = data;
+    /* Enable LA v1.1 instructions */
+    data = cpu->env.cpucfg[2];
+    data = FIELD_DP32(data, CPUCFG2, FRECIPE, 1);
+    data = FIELD_DP32(data, CPUCFG2, LAM_BH, 1);
+    data = FIELD_DP32(data, CPUCFG2, LAMCAS, 1);
+    data = FIELD_DP32(data, CPUCFG2, LLACQ_SCREL, 1);
+    data = FIELD_DP32(data, CPUCFG2, SCQ, 1);
+    cpu->env.cpucfg[2] = data;
 
-        data = cpu->env.cpucfg[3];
-        data = FIELD_DP32(data, CPUCFG3, DBAR_HINTS, 1);
-        cpu->env.cpucfg[3] = data;
-    }
+    data = cpu->env.cpucfg[3];
+    data = FIELD_DP32(data, CPUCFG3, DBAR_HINTS, 1);
+    cpu->env.cpucfg[3] = data;
+}
+
+static void loongarch_max_initfn(Object *obj)
+{
+    /* '-cpu max': use it for max supported CPU features */
+    loongarch_la664_initfn(obj);
 }
 
 #if defined(CONFIG_KVM)
@@ -606,6 +627,13 @@ static void loongarch_cpu_reset_hold(Object *obj, ResetType type)
         lacc->parent_phases.hold(obj, type);
     }
 
+    /*
+     * Workaround for edk2-stable202408, CSR PGD register is set only if
+     * its value is equal to zero for boot cpu, it causes reboot issue.
+     */
+    memset(env, 0, offsetof(CPULoongArchState, end_reset_fields));
+    memset(sys, 0, offsetof(CPUSysState, end_reset_fields));
+
 #ifdef CONFIG_TCG
     env->fcsr0_mask = FCSR0_M1 | FCSR0_M2 | FCSR0_M3;
 
@@ -620,47 +648,11 @@ static void loongarch_cpu_reset_hold(Object *obj, ResetType type)
                            R_TLBENTRY_32_PPN_MASK;
     }
 #endif
-    env->fcsr0 = 0x0;
 
-    int n;
-    /* Set csr registers value after reset, see the manual 6.4. */
-    sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, PLV, 0);
-    sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, IE, 0);
     sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, DA, 1);
-    sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, PG, 0);
-    sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, DATF, 0);
-    sys->CSR_CRMD = FIELD_DP64(sys->CSR_CRMD, CSR_CRMD, DATM, 0);
-
-    sys->CSR_EUEN = FIELD_DP64(sys->CSR_EUEN, CSR_EUEN, FPE, 0);
-    sys->CSR_EUEN = FIELD_DP64(sys->CSR_EUEN, CSR_EUEN, SXE, 0);
-    sys->CSR_EUEN = FIELD_DP64(sys->CSR_EUEN, CSR_EUEN, ASXE, 0);
-    sys->CSR_EUEN = FIELD_DP64(sys->CSR_EUEN, CSR_EUEN, BTE, 0);
-
-    sys->CSR_MISC = 0;
-
-    sys->CSR_ECFG = FIELD_DP64(sys->CSR_ECFG, CSR_ECFG, VS, 0);
-    sys->CSR_ECFG = FIELD_DP64(sys->CSR_ECFG, CSR_ECFG, LIE, 0);
-
-    sys->CSR_ESTAT = sys->CSR_ESTAT & (~MAKE_64BIT_MASK(0, 2));
-    sys->CSR_RVACFG = FIELD_DP64(sys->CSR_RVACFG, CSR_RVACFG, RBITS, 0);
     sys->CSR_CPUID = cs->cpu_index;
-    sys->CSR_TCFG = FIELD_DP64(sys->CSR_TCFG, CSR_TCFG, EN, 0);
-    sys->CSR_LLBCTL = FIELD_DP64(sys->CSR_LLBCTL, CSR_LLBCTL, KLO, 0);
-    sys->CSR_TLBRERA = FIELD_DP64(sys->CSR_TLBRERA, CSR_TLBRERA, ISTLBR, 0);
-    sys->CSR_MERRCTL = FIELD_DP64(sys->CSR_MERRCTL, CSR_MERRCTL, ISMERR, 0);
     sys->CSR_TID = cs->cpu_index;
-    /*
-     * Workaround for edk2-stable202408, CSR PGD register is set only if
-     * its value is equal to zero for boot cpu, it causes reboot issue.
-     *
-     * Here clear CSR registers relative with TLB.
-     */
-    sys->CSR_PGDH = 0;
-    sys->CSR_PGDL = 0;
-    sys->CSR_PWCH = 0;
-    sys->CSR_EENTRY = 0;
-    sys->CSR_TLBRENTRY = 0;
-    sys->CSR_MERRENTRY = 0;
+
     /* set CSR_PWCL.PTBASE and CSR_STLBPS.PS bits from CSR_PRCFG2 */
     if (sys->CSR_PRCFG2 == 0) {
         sys->CSR_PRCFG2 = 0x3fffff000;
@@ -668,18 +660,9 @@ static void loongarch_cpu_reset_hold(Object *obj, ResetType type)
     tlb_ps = ctz32(sys->CSR_PRCFG2);
     sys->CSR_STLBPS = FIELD_DP64(sys->CSR_STLBPS, CSR_STLBPS, PS, tlb_ps);
     sys->CSR_PWCL = FIELD_DP64(sys->CSR_PWCL, CSR_PWCL, PTBASE, tlb_ps);
-    for (n = 0; n < 4; n++) {
-        sys->CSR_DMW[n] = FIELD_DP64(sys->CSR_DMW[n], CSR_DMW, PLV0, 0);
-        sys->CSR_DMW[n] = FIELD_DP64(sys->CSR_DMW[n], CSR_DMW, PLV1, 0);
-        sys->CSR_DMW[n] = FIELD_DP64(sys->CSR_DMW[n], CSR_DMW, PLV2, 0);
-        sys->CSR_DMW[n] = FIELD_DP64(sys->CSR_DMW[n], CSR_DMW, PLV3, 0);
-    }
 
 #ifndef CONFIG_USER_ONLY
     env->pc = 0x1c000000;
-#ifdef CONFIG_TCG
-    memset(env->tlb, 0, sizeof(env->tlb));
-#endif
     if (kvm_enabled()) {
         kvm_arch_reset_vcpu(cs);
     }
@@ -694,8 +677,15 @@ static void loongarch_cpu_reset_hold(Object *obj, ResetType type)
 static void loongarch_cpu_disas_set_info(const CPUState *cs,
                                          disassemble_info *info)
 {
+    CPULoongArchState *env = cpu_env((CPUState *)cs);
+
     info->endian = BFD_ENDIAN_LITTLE;
     info->print_insn = print_insn_loongarch;
+
+    info->cap_arch = CS_ARCH_LOONGARCH;
+    info->cap_insn_unit = 4;
+    info->cap_insn_split = 4;
+    info->cap_mode = is_la64(env) ? CS_MODE_LOONGARCH64 : CS_MODE_LOONGARCH32;
 }
 
 static void loongarch_cpu_realizefn(DeviceState *dev, Error **errp)
@@ -704,7 +694,7 @@ static void loongarch_cpu_realizefn(DeviceState *dev, Error **errp)
     LoongArchCPUClass *lacc = LOONGARCH_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
 
-    cpu_exec_realizefn(cs, &local_err);
+    cpu_common_realize(cs, &local_err);
     if (local_err != NULL) {
         error_propagate(errp, local_err);
         return;
@@ -734,11 +724,18 @@ static void loongarch_cpu_init(Object *obj)
 {
 #ifndef CONFIG_USER_ONLY
     LoongArchCPU *cpu = LOONGARCH_CPU(obj);
+#ifdef CONFIG_TCG
+    CPULoongArchState *env = &cpu->env;
+    CPUTimerState *timer;
+#endif
 
     qdev_init_gpio_in(DEVICE(cpu), loongarch_cpu_set_irq, N_IRQS);
 #ifdef CONFIG_TCG
-    timer_init_ns(&cpu->timer, QEMU_CLOCK_VIRTUAL,
-                  &loongarch_constant_timer_cb, cpu);
+    timer = env_timer(env);
+    timer->irq = IRQ_TIMER;
+    timer->cs  = CPU(obj);
+    timer_init_ns(&timer->timer, QEMU_CLOCK_VIRTUAL,
+                  &cpu_loongarch_timer_cb, timer);
 #endif
 #endif
 }
@@ -956,6 +953,8 @@ static const TypeInfo loongarch_cpu_type_infos[] = {
         .abstract = true,
         .class_init = loongarch64_cpu_class_init,
     },
+
+    DEFINE_LOONGARCH_CPU_TYPE(64, "la664", loongarch_la664_initfn),
     DEFINE_LOONGARCH_CPU_TYPE(64, "la464", loongarch_la464_initfn),
     DEFINE_LOONGARCH_CPU_TYPE(32, "la132", loongarch_la132_initfn),
     DEFINE_LOONGARCH_CPU_TYPE(64, "max", loongarch_max_initfn),

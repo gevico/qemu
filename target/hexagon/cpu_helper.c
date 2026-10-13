@@ -11,6 +11,7 @@
 #include "hw/core/boards.h"
 #include "hw/hexagon/hexagon.h"
 #include "hw/hexagon/hexagon_globalreg.h"
+#include "hw/hexagon/hexagon_hvx_context.h"
 #include "hex_interrupts.h"
 #include "hex_mmu.h"
 #include "system/runstate.h"
@@ -25,6 +26,106 @@
 #include "sys_macros.h"
 #include "arch.h"
 
+#ifndef CONFIG_USER_ONLY
+
+static bool hexagon_read_memory_small(CPUHexagonState *env, target_ulong addr,
+                                      int byte_count, uint64_t *data,
+                                      int mmu_idx, uintptr_t retaddr)
+ {
+    /* handle small sizes */
+    switch (byte_count) {
+    case 1:
+        *data = cpu_ldub_mmuidx_ra(env, addr, mmu_idx, retaddr);
+        return true;
+
+    case 2:
+        *data = cpu_lduw_le_mmuidx_ra(env, addr, mmu_idx, retaddr);
+        return true;
+
+    case 4:
+        *data = cpu_ldl_le_mmuidx_ra(env, addr, mmu_idx, retaddr);
+        return true;
+
+    case 8:
+        *data = cpu_ldq_le_mmuidx_ra(env, addr, mmu_idx, retaddr);
+        return true;
+
+    default:
+        /* larger request, handle elsewhere */
+        return false;
+    }
+}
+
+void hexagon_read_memory(CPUHexagonState *env, target_ulong vaddr, int size,
+                         void *retptr, uintptr_t retaddr)
+{
+    BQL_LOCK_GUARD();
+    CPUState *cs = env_cpu(env);
+    unsigned mmu_idx = cpu_mmu_index(cs, false);
+    uint64_t data;
+    if (hexagon_read_memory_small(env, vaddr, size, &data, mmu_idx, retaddr)) {
+        stn_he_p(retptr, size, data);
+    } else {
+        cpu_abort(cs, "%s: ERROR: bad size = %d!\n", __func__, size);
+    }
+}
+
+static bool hexagon_write_memory_small(CPUHexagonState *env, target_ulong addr,
+                                       int byte_count, uint64_t data,
+                                       int mmu_idx, uintptr_t retaddr)
+{
+    /* handle small sizes */
+    switch (byte_count) {
+    case 1:
+        cpu_stb_mmuidx_ra(env, addr, (uint8_t)data, mmu_idx, retaddr);
+        return true;
+
+    case 2:
+        cpu_stw_le_mmuidx_ra(env, addr, (uint16_t)data, mmu_idx, retaddr);
+        return true;
+
+    case 4:
+        cpu_stl_le_mmuidx_ra(env, addr, (uint32_t)data, mmu_idx, retaddr);
+        return true;
+
+    case 8:
+        cpu_stq_le_mmuidx_ra(env, addr, (uint64_t)data, mmu_idx, retaddr);
+        return true;
+
+    default:
+        /* larger request, handle elsewhere */
+        return false;
+    }
+}
+
+void hexagon_write_memory(CPUHexagonState *env, target_ulong vaddr,
+                          int size, uint64_t data, uintptr_t retaddr)
+{
+    CPUState *cs = env_cpu(env);
+    unsigned mmu_idx = cpu_mmu_index(cs, false);
+    if (!hexagon_write_memory_small(env, vaddr, size, data, mmu_idx, retaddr)) {
+        cpu_abort(cs, "%s: ERROR: bad size = %d!\n", __func__, size);
+    }
+}
+
+static inline uint32_t page_start(uint32_t addr)
+{
+    uint32_t page_align = ~(TARGET_PAGE_SIZE - 1);
+    return addr & page_align;
+}
+
+void hexagon_peek_memory_range(CPUHexagonState *env, uint32_t start_addr,
+                               uint32_t length, uintptr_t retaddr)
+{
+    unsigned int warm;
+    uint32_t first = page_start(start_addr);
+    uint32_t last = page_start(start_addr + length - 1);
+    for (uint32_t page = first; page <= last; page += TARGET_PAGE_SIZE) {
+        hexagon_read_memory(env, page, 1, &warm, retaddr);
+    }
+}
+
+#endif
 
 uint32_t hexagon_get_pmu_counter(CPUHexagonState *cur_env, int index)
 {
@@ -36,7 +137,7 @@ uint64_t hexagon_get_sys_pcycle_count(CPUHexagonState *env)
     uint64_t total = 0;
     CPUState *cs;
 
-    g_assert(bql_locked());
+    BQL_LOCK_GUARD();
     CPU_FOREACH(cs) {
         CPUHexagonState *thread_env = cpu_env(cs);
         total += thread_env->t_cycle_count;
@@ -54,11 +155,15 @@ uint32_t hexagon_get_sys_pcycle_count_low(CPUHexagonState *env)
     return (uint32_t)(hexagon_get_sys_pcycle_count(env));
 }
 
+/*
+ * Every function in this family takes the BQL itself, so the guard below
+ * holds it across the read-modify-write.  Nested guards are no-ops.
+ */
 void hexagon_set_sys_pcycle_count_high(CPUHexagonState *env, uint32_t val)
 {
     uint64_t old;
 
-    g_assert(bql_locked());
+    BQL_LOCK_GUARD();
     old = hexagon_get_sys_pcycle_count(env);
     old = deposit64(old, 32, 32, val);
     hexagon_set_sys_pcycle_count(env, old);
@@ -68,7 +173,7 @@ void hexagon_set_sys_pcycle_count_low(CPUHexagonState *env, uint32_t val)
 {
     uint64_t old;
 
-    g_assert(bql_locked());
+    BQL_LOCK_GUARD();
     old = hexagon_get_sys_pcycle_count(env);
     old = deposit64(old, 0, 32, val);
     hexagon_set_sys_pcycle_count(env, old);
@@ -81,7 +186,7 @@ void hexagon_set_sys_pcycle_count(CPUHexagonState *env, uint64_t val)
     int num_threads;
     int64_t delta, per_thread, remainder;
 
-    g_assert(bql_locked());
+    BQL_LOCK_GUARD();
     total = hexagon_get_sys_pcycle_count(env);
 
     /* Count active threads */
@@ -142,6 +247,75 @@ void hexagon_resume_threads(CPUHexagonState *current_env, uint32_t mask)
     }
 }
 
+static unsigned hexagon_hvx_context_count(HexagonCPU *cpu)
+{
+    unsigned n;
+
+    for (n = 0; n < HVX_CONTEXTS_MAX; n++) {
+        if (!cpu->hvx_ctx[n]) {
+            break;
+        }
+    }
+    return n;
+}
+
+static unsigned hexagon_hvx_context_index(HexagonCPU *cpu, uint8_t xa)
+{
+    unsigned n = hexagon_hvx_context_count(cpu);
+
+    if (n == 0) {
+        return 0;
+    }
+    if (xa >= n) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "SSR.XA %u is out of range for %u HVX contexts\n",
+                      xa, n);
+    }
+    /*
+     * The behavior here is unspecified, reference simulator uses
+     * mappings that effectively keep the context in-range.  The
+     * modulus seems just as good as any.
+     */
+    return xa % n;
+}
+
+/*
+ * Diagnostic only.  Called separately from hexagon_hvx_select_context()
+ * so migration post_load, where other CPUs' env->hvx may still be stale,
+ * doesn't trip a false positive.
+ */
+static void hexagon_hvx_check_overcommit(CPUHexagonState *env, unsigned idx)
+{
+    CPUState *cs;
+    unsigned users = 0;
+
+    CPU_FOREACH(cs) {
+        CPUHexagonState *other = cpu_env(cs);
+
+        if (other->hvx == env->hvx &&
+            GET_SSR_FIELD(SSR_XE, other->t_sreg[HEX_SREG_SSR])) {
+            users++;
+        }
+    }
+
+    if (users > 1) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "HVX context %u is enabled for %u hardware threads "
+                      "at once, which is undefined\n", idx, users);
+    }
+}
+
+unsigned hexagon_hvx_select_context(CPUHexagonState *env, uint32_t ssr)
+{
+    HexagonCPU *cpu = env_archcpu(env);
+    unsigned idx = hexagon_hvx_context_index(cpu, GET_SSR_FIELD(SSR_XA, ssr));
+
+    if (cpu->hvx_ctx[0]) {
+        env->hvx = &cpu->hvx_ctx[idx]->regs;
+    }
+    return idx;
+}
+
 void hexagon_modify_ssr(CPUHexagonState *env, uint32_t new, uint32_t old)
 {
     bool old_EX, old_UM, old_GM, old_IE;
@@ -163,6 +337,18 @@ void hexagon_modify_ssr(CPUHexagonState *env, uint32_t new, uint32_t old)
         (old_UM != new_UM) ||
         (old_GM != new_GM)) {
         hex_mmu_mode_change(env);
+    }
+
+    bool xa_changed = GET_SSR_FIELD(SSR_XA, new) != GET_SSR_FIELD(SSR_XA, old);
+    bool xe_changed = GET_SSR_FIELD(SSR_XE, new) != GET_SSR_FIELD(SSR_XE, old);
+
+    if (xa_changed || xe_changed) {
+        unsigned idx = xa_changed
+            ? hexagon_hvx_select_context(env, new)
+            : hexagon_hvx_context_index(env_archcpu(env),
+                                        GET_SSR_FIELD(SSR_XA, new));
+
+        hexagon_hvx_check_overcommit(env, idx);
     }
 
     old_asid = GET_SSR_FIELD(SSR_ASID, old);
@@ -212,9 +398,9 @@ void hexagon_ssr_set_cause(CPUHexagonState *env, uint32_t cause)
 }
 
 
-int get_exe_mode(CPUHexagonState *env)
+int get_exe_mode(const CPUHexagonState *env)
 {
-    HexagonCPU *cpu;
+    const HexagonCPU *cpu;
     uint32_t modectl, thread_enabled_mask, thread_wait_mask;
     uint32_t isdbst, debugmode;
     bool E_bit, W_bit, D_bit;
@@ -229,10 +415,17 @@ int get_exe_mode(CPUHexagonState *env)
     E_bit = thread_enabled_mask & (0x1 << env->threadId);
     thread_wait_mask = GET_FIELD(MODECTL_W, modectl);
     W_bit = thread_wait_mask & (0x1 << env->threadId);
-    isdbst = cpu->globalregs ?
-        hexagon_globalreg_read(cpu->globalregs, HEX_SREG_ISDBST,
-                               env->threadId) : 0;
-    debugmode = GET_FIELD(ISDBST_DEBUGMODE, isdbst);
+    if (cpu->cfg.hex_def->hex_version >= HEX_VER_V81) {
+        isdbst = cpu->globalregs ?
+            hexagon_globalreg_read(cpu->globalregs, HEX_SREG_ISDBST2,
+                                   env->threadId) : 0;
+        debugmode = GET_FIELD(ISDBST2_DEBUGMODE, isdbst);
+    } else {
+        isdbst = cpu->globalregs ?
+            hexagon_globalreg_read(cpu->globalregs, HEX_SREG_ISDBST,
+                                   env->threadId) : 0;
+        debugmode = GET_FIELD(ISDBST_DEBUGMODE, isdbst);
+    }
     D_bit = debugmode & (0x1 << env->threadId);
 
     if (!D_bit && !W_bit && !E_bit) {
@@ -384,7 +577,7 @@ static int sys_in_user_mode_ssr(uint32_t ssr)
     return 0;
 }
 
-int get_cpu_mode(CPUHexagonState *env)
+int get_cpu_mode(const CPUHexagonState *env)
 {
     uint32_t ssr = env->t_sreg[HEX_SREG_SSR];
 

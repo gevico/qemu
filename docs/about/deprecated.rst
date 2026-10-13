@@ -71,6 +71,15 @@ flexible enough. The monitor objects have been converted to QOM, so
 ``-mon mode=control`` is replaced by ``-object monitor-qmp``. The
 short convenience options are not deprecated, only ``-mon``.
 
+``script=no`` and ``downscript=no`` for ``-netdev tap`` (since 11.2)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The special value ``"no"`` for the ``script`` and ``downscript``
+parameters of ``-netdev tap`` disables script execution.  This special
+treatment of ``"no"`` is deprecated.  Use an empty string (``script=``
+or ``downscript=``) to disable script execution instead.  In a future
+version, ``"no"`` will be treated as a plain file name.
+
 QEMU Machine Protocol (QMP) commands
 ------------------------------------
 
@@ -164,6 +173,15 @@ Use ``job-finalize`` instead.
 
 Use ``query-accelerators`` instead.
 
+``"no"`` as value of ``script``/``downscript`` for tap in ``netdev_add`` (since 11.2)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The special value ``"no"`` for the ``script`` and ``downscript``
+parameters of ``netdev_add`` with ``type=tap`` disables script
+execution.  This special treatment of ``"no"`` is deprecated.  Use an
+empty string instead.  In a future version, ``"no"`` will be treated as
+a plain file name.
+
 Human Machine Protocol (HMP) commands
 -------------------------------------
 
@@ -249,6 +267,14 @@ was an early implementation of memory encryption support in QEMU, but it has
 been superseded by the more comprehensive ``confidential-guest-support``
 object.
 
+``next-cube`` m68k machine (since 11.2)
+'''''''''''''''''''''''''''''''''''''''
+
+The machine never got fully implemented and can only show the firmware prompt.
+Given the incomplete state and slow progress on improvements, it might get
+removed again without replacement.
+
+
 Backend options
 ---------------
 
@@ -275,6 +301,24 @@ file is deprecated and will be removed with no replacement in a
 future release. Where no 'dh-params.pem' file is provided, the DH
 parameters will be automatically negotiated in accordance with
 RFC7919.
+
+Devices
+-------
+
+``virtio-crypto`` and cryptodev backends (since 11.2)
+'''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+The ``virtio-crypto`` device emulation is quite complex code with a
+number of known flaws. It has never been migratable, so it is
+unlikely to be used in any serious virtualization setting. Modern
+ISAs provide on-CPU cryptography instructions (e.g. AES-NI/VAES,
+armv8 crypto extensions), and the Linux kernel deprecated AF_ALG
+and dropped its off-CPU accelerator support in Linux 7.2, removing
+the primary userspace path for off-CPU crypto acceleration. The
+time for this sort of off-load has passed.
+
+As this is the only device that uses the cryptodev backends these will
+be removed at the same time the ``virtio-crypto`` device is.
 
 Device options
 --------------
@@ -416,6 +460,27 @@ ABI is long-obsolete. We are therefore deprecating both OABI support
 and NWFPE emulation, and they will be removed in a future QEMU
 release.
 
+Build features
+--------------
+
+Crypto AF_ALG backend (since 11.2)
+----------------------------------
+
+The use of the AF_ALG backend for cryptography has been deprecated
+with no replacement.
+
+The AF_ALG interface is deprecated by Linux 7.2 and all support
+for hardware accelerators has been removed. It will thus always be
+slower than userspace crypto due to the overhead of copying data
+to kernel space. The GNUTLS, Nettle and GCrypt libraries supported
+by QEMU all include a variety of hardware optimized crypto
+implementations which should suffice for typical needs.
+
+For the virtio-crypto device, the 'cryptodev-backend-lkcf' backend
+can offload some operations to the kernel via the keyctl syscall,
+and the 'cryptodev-vhost-user' backend can offload the device
+backend to an external process which can integrate with crypto
+accelerators.
 
 Backwards compatibility
 -----------------------

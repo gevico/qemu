@@ -175,16 +175,6 @@ def _check_binfmt_misc(executable):
     return interp, True
 
 
-def _read_qemu_dockerfile(img_name):
-    # special case for Debian linux-user images
-    if img_name.startswith("debian") and img_name.endswith("user"):
-        img_name = "debian-bootstrap"
-
-    df = os.path.join(os.path.dirname(__file__), "dockerfiles",
-                      img_name + ".docker")
-    return _read_dockerfile(df)
-
-
 def _dockerfile_verify_flat(df):
     "Verify we do not include other qemu/ layers"
     for l in df.splitlines():
@@ -297,13 +287,6 @@ class Docker(object):
                                              dir=docker_dir, suffix=".docker")
         tmp_df.write(dockerfile)
 
-        if user:
-            uid = os.getuid()
-            uname = getpass.getuser()
-            tmp_df.write("\n")
-            tmp_df.write("RUN id %s 2>/dev/null || useradd -u %d -U %s" %
-                         (uname, uid, uname))
-
         tmp_df.write("\n")
         tmp_df.write("LABEL com.qemu.dockerfile-checksum=%s\n" % (checksum))
         for f, c in extra_files_cksum:
@@ -314,6 +297,13 @@ class Docker(object):
         build_args = ["build", "-t", tag, "-f", tmp_df.name]
         if self._buildkit:
             build_args += ["--build-arg", "BUILDKIT_INLINE_CACHE=1"]
+
+        if user:
+            uid = os.getuid()
+            if uid != 0:
+                uname = getpass.getuser()
+                build_args += ["--build-arg", "USER=%s" % uname,
+                               "--build-arg", "UID=%s" % uid]
 
         if registry is not None:
             pull_args = ["pull", "%s/%s" % (registry, tag)]
@@ -345,10 +335,11 @@ class Docker(object):
 
         if as_user:
             uid = os.getuid()
-            cmd = [ "-u", str(uid) ] + cmd
-            # podman requires a bit more fiddling
-            if self._command[0] == "podman":
-                cmd.insert(0, '--userns=keep-id')
+            if uid != 0:
+                cmd = [ "-u", str(uid) ] + cmd
+                # podman requires a bit more fiddling
+                if self._command[0] == "podman":
+                    cmd.insert(0, '--userns=keep-id')
 
         ret = self._do_check(["run", "--rm", "--label",
                              "com.qemu.instance.uuid=" + label] + cmd,
@@ -390,9 +381,12 @@ class RunCommand(SubCommand):
                             help="Don't remove image when command completes")
         parser.add_argument("--run-as-current-user", action="store_true",
                             help="Run container using the current user's uid")
+        parser.add_argument('cmd', nargs='*',
+                            help="""The command to run. You should precede with
+                            -- to avoid confusion about its flags""")
 
     def run(self, args, argv):
-        return Docker(args.command).run(argv, args.keep, quiet=args.quiet,
+        return Docker(args.command).run(args.cmd, args.keep, quiet=args.quiet,
                                         as_user=args.run_as_current_user)
 
 
@@ -429,8 +423,7 @@ class BuildCommand(SubCommand):
         dkr = Docker(args.command)
         if "--no-cache" not in argv and \
            dkr.image_matches_dockerfile(tag, dockerfile):
-            if not args.quiet:
-                print("Image is up to date.")
+            pass
         else:
             # Create a docker context directory for the build
             docker_dir = tempfile.mkdtemp(prefix="docker_build")
@@ -604,6 +597,7 @@ class ProbeCommand(SubCommand):
             print(" ".join(docker._command))
         except Exception:
             print("no")
+            return 1
 
         return
 

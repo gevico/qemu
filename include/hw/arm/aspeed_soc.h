@@ -25,6 +25,7 @@
 #include "hw/i2c/aspeed_i2c.h"
 #include "hw/i3c/aspeed_i3c.h"
 #include "hw/ssi/aspeed_smc.h"
+#include "hw/misc/aspeed_acry.h"
 #include "hw/misc/aspeed_hace.h"
 #include "hw/misc/aspeed_sbc.h"
 #include "hw/misc/aspeed_sli.h"
@@ -36,6 +37,8 @@
 #include "hw/gpio/aspeed_sgpio.h"
 #include "hw/sd/aspeed_sdhci.h"
 #include "hw/usb/hcd-ehci.h"
+#include "hw/usb/aspeed-udc.h"
+#include "hw/core/or-irq.h"
 #include "qom/object.h"
 #include "hw/misc/aspeed_lpc.h"
 #include "hw/misc/unimp.h"
@@ -69,6 +72,7 @@ struct AspeedSoCState {
     MemoryRegion *dram_mr;
     MemoryRegion dram_container;
     MemoryRegion sram[ASPEED_SRAM_NUM];
+    MemoryRegion sram_container[ASPEED_SRAM_NUM];
     MemoryRegion spi_boot_container;
     MemoryRegion spi_boot;
     MemoryRegion vbootrom;
@@ -81,6 +85,7 @@ struct AspeedSoCState {
     AspeedSCUState scu;
     AspeedSCUState scuio;
     AspeedHACEState hace;
+    AspeedACRYState acry;
     AspeedXDMAState xdma;
     AspeedADCState adc;
     AspeedSMCState fmc;
@@ -89,7 +94,6 @@ struct AspeedSoCState {
     AspeedSBCState sbc;
     AspeedSLIState sli;
     AspeedSLIState sliio;
-    UnimplementedDeviceState sbc_unimplemented;
     AspeedSDMCState sdmc;
     AspeedPWMState pwm;
     AspeedWDTState wdt[ASPEED_WDTS_NUM];
@@ -138,6 +142,8 @@ struct Aspeed2600SoCState {
 
     A15MPPrivState a7mpcore;
     ARMCPU cpu[ASPEED_CPUS_NUM]; /* XXX belong to a7mpcore */
+    AspeedUDCState udc;
+    OrIRQState ehci2_udc_orgate;
 };
 
 #define TYPE_ASPEED2600_SOC "aspeed2600-soc"
@@ -151,6 +157,7 @@ struct Aspeed27x0SoCState {
     AspeedINTCState intcioexp[ASPEED_IOEXP_NUM];
     GICv3State gic;
     MemoryRegion dram_empty;
+    Aspeed2700SCUState scu;
 };
 
 #define TYPE_ASPEED27X0_SOC "aspeed27x0-soc"
@@ -269,6 +276,7 @@ enum {
     ASPEED_DEV_EMMC,
     ASPEED_DEV_KCS,
     ASPEED_DEV_HACE,
+    ASPEED_DEV_ACRY,
     ASPEED_DEV_DPMCU,
     ASPEED_DEV_DP,
     ASPEED_DEV_I3C,

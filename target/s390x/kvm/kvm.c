@@ -99,8 +99,10 @@
 #define DIAG_TIMEREVENT                 0x288
 #define DIAG_IPL                        0x308
 #define DIAG_SET_CONTROL_PROGRAM_CODES  0x318
+#define DIAG_CERT_STORE                 0x320
 #define DIAG_KVM_HYPERCALL              0x500
 #define DIAG_KVM_BREAKPOINT             0x501
+#define DIAG_SECURE_IPL                 0x508
 
 #define ICPT_INSTRUCTION                0x04
 #define ICPT_PROGRAM                    0x08
@@ -145,7 +147,7 @@ static int cap_mem_op;
 static int cap_mem_op_extension;
 static int cap_s390_irq;
 static int cap_ri;
-static int cap_hpage_1m;
+static int cap_hpage;
 static int cap_vcpu_resets;
 static int cap_protected;
 static int cap_zpci_op;
@@ -231,7 +233,7 @@ static void kvm_s390_enable_cmma(void)
         .attr = KVM_S390_VM_MEM_ENABLE_CMMA,
     };
 
-    if (cap_hpage_1m) {
+    if (cap_hpage) {
         warn_report("CMM will not be enabled because it is not "
                     "compatible with huge memory backings.");
         return;
@@ -292,30 +294,28 @@ void kvm_s390_crypto_reset(void)
     }
 }
 
-void kvm_s390_set_max_pagesize(uint64_t pagesize, Error **errp)
+static bool kvm_s390_pgsize_cap(uint32_t capa, const char *s, Error **errp)
 {
-    if (pagesize == 4 * KiB) {
-        return;
+    if (kvm_vm_enable_cap(kvm_state, capa, 0)) {
+        error_setg(errp, "Memory backing with %s pages was specified, "
+                   "but KVM does not support this memory backing", s);
+        return false;
     }
-
-    if (pagesize != 1 * MiB) {
-        error_setg(errp, "Memory backing with 2G pages was specified, "
-                   "but KVM does not support this memory backing");
-        return;
-    }
-
-    if (kvm_vm_enable_cap(kvm_state, KVM_CAP_S390_HPAGE_1M, 0)) {
-        error_setg(errp, "Memory backing with 1M pages was specified, "
-                   "but KVM does not support this memory backing");
-        return;
-    }
-
-    cap_hpage_1m = 1;
+    return true;
 }
 
-int kvm_s390_get_hpage_1m(void)
+void kvm_s390_set_max_pagesize(uint64_t pagesize, Error **errp)
 {
-    return cap_hpage_1m;
+    if (pagesize == MiB) {
+        cap_hpage = kvm_s390_pgsize_cap(KVM_CAP_S390_HPAGE_1M, "1M", errp);
+    } else if (pagesize != 4 * KiB) {
+        cap_hpage = 2 * kvm_s390_pgsize_cap(KVM_CAP_S390_HPAGE_2G, "2G", errp);
+    }
+}
+
+int kvm_s390_get_hpage(void)
+{
+    return cap_hpage;
 }
 
 static void ccw_machine_class_foreach(ObjectClass *oc, void *opaque)
@@ -407,7 +407,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
 {
     unsigned int max_cpus = MACHINE(qdev_get_machine())->smp.max_cpus;
     S390CPU *cpu = S390_CPU(cs);
-    kvm_s390_set_cpu_state(cpu, cpu->env.cpu_state);
+    kvm_s390_set_cpu_state(cpu, s390_cpu_get_state(cpu));
     cpu->irqstate = g_malloc0(VCPU_IRQ_BUF_SIZE(max_cpus));
     return 0;
 }
@@ -1533,6 +1533,26 @@ static void handle_diag_318(S390CPU *cpu, struct kvm_run *run)
     }
 }
 
+static void kvm_handle_diag_320(S390CPU *cpu, struct kvm_run *run)
+{
+    uint64_t r1, r3;
+
+    r1 = (run->s390_sieic.ipa & 0x00f0) >> 4;
+    r3 = run->s390_sieic.ipa & 0x000f;
+
+    handle_diag_320(&cpu->env, r1, r3, RA_IGNORED);
+}
+
+static void kvm_handle_diag_508(S390CPU *cpu, struct kvm_run *run)
+{
+    uint64_t r1, r3;
+
+    r1 = (run->s390_sieic.ipa & 0x00f0) >> 4;
+    r3 = run->s390_sieic.ipa & 0x000f;
+
+    handle_diag_508(&cpu->env, r1, r3, RA_IGNORED);
+}
+
 #define DIAG_KVM_CODE_MASK 0x000000000000ffff
 
 static int handle_diag(S390CPU *cpu, struct kvm_run *run, uint32_t ipb)
@@ -1562,6 +1582,12 @@ static int handle_diag(S390CPU *cpu, struct kvm_run *run, uint32_t ipb)
 #endif /* CONFIG_S390_CCW_VIRTIO */
     case DIAG_KVM_BREAKPOINT:
         r = handle_sw_breakpoint(cpu, run);
+        break;
+    case DIAG_CERT_STORE:
+        kvm_handle_diag_320(cpu, run);
+        break;
+    case DIAG_SECURE_IPL:
+        kvm_handle_diag_508(cpu, run);
         break;
     default:
         trace_kvm_insn_diag(func_code);
@@ -1981,7 +2007,7 @@ int kvm_s390_get_ri(void)
     return cap_ri;
 }
 
-int kvm_s390_set_cpu_state(S390CPU *cpu, uint8_t cpu_state)
+int kvm_s390_set_cpu_state(S390CPU *cpu, S390CpuState cpu_state)
 {
     struct kvm_mp_state mp_state = {};
     int ret;
@@ -2473,6 +2499,12 @@ bool kvm_s390_get_host_cpu_model(S390CPUModel *model, Error **errp)
     if (kvm_check_extension(kvm_state, KVM_CAP_S390_DIAG318)) {
         set_bit(S390_FEAT_DIAG_318, model->features);
     }
+
+    set_bit(S390_FEAT_CERT_STORE, model->features);
+
+    /* Some Secure IPL facilities are emulated by QEMU */
+    set_bit(S390_FEAT_SIPL, model->features);
+    set_bit(S390_FEAT_SCLAF, model->features);
 
     /* Test for Ultravisor features that influence secure guest behavior */
     query_uv_feat_guest(model->features);

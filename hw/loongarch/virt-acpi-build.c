@@ -128,7 +128,7 @@ build_madt(GArray *table_data, BIOSLinker *linker,
     MachineClass *mc = MACHINE_GET_CLASS(ms);
     const CPUArchIdList *arch_ids = mc->possible_cpu_arch_ids(ms);
     int i, arch_id, flags;
-    AcpiTable table = { .sig = "APIC", .rev = 1, .oem_id = lvms->oem_id,
+    AcpiTable table = { .sig = "APIC", .rev = 6, .oem_id = lvms->oem_id,
                         .oem_table_id = lvms->oem_table_id };
 
     acpi_table_begin(&table, table_data);
@@ -268,7 +268,7 @@ spcr_setup(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     AcpiSpcrData serial = {
         .interface_type = 0,       /* 16550 compatible */
         .base_addr.id = AML_AS_SYSTEM_MEMORY,
-        .base_addr.width = 32,
+        .base_addr.width = 8,
         .base_addr.offset = 0,
         .base_addr.size = 1,
         .base_addr.addr = VIRT_UART_BASE,

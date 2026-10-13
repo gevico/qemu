@@ -10,6 +10,7 @@
 #include "qom/object.h"
 #include "hw/core/hotplug.h"
 #include "hw/core/resettable.h"
+#include "monitor/hmp.h"
 
 /**
  * DOC: The QEMU Device API
@@ -22,27 +23,26 @@
  * Realization
  * -----------
  *
- * Devices are constructed in two stages:
+ * Devices are constructed in the following order:
  *
- * 1) object instantiation via object_initialize() and
- * 2) device realization via the #DeviceState.realized property
+ * 1) #TypeInfo.instance_init
+ * 2) pre-realize property value setting
+ * 3) device realization
  *
- * The former may not fail (and must not abort or exit, since it is called
- * during device introspection already), and the latter may return error
- * information to the caller and must be re-entrant.
- * Trivial field initializations should go into #TypeInfo.instance_init.
- * Operations depending on @props static properties should go into @realize.
+ * #TypeInfo.instance_init may not fail. #DeviceClass.realize can
+ * fail, returning error information to the caller, and must be re-entrant.
+ *
+ * #TypeInfo.instance_init should add instance properties but must not
+ * have any side effect not contained in the instance, since it happens
+ * during device introspection. Any operations without special requirements
+ * should go into @realize so that they can be skipped during device
+ * introspection. It is possible to add properties during realization,
+ * but they will not be introspectable or configurable before realization.
+ *
+ * Child buses are automatically realized. Child devices must be manually
+ * realized (e.g. by calling qdev_realize()).
+ *
  * After successful realization, setting static properties will fail.
- *
- * As an interim step, the #DeviceState.realized property can also be
- * set with qdev_realize(). In the future, devices will propagate this
- * state change to their children and along busses they expose. The
- * point in time will be deferred to machine creation, so that values
- * set in @realize will not be introspectable beforehand. Therefore
- * devices must not create children during @realize; they should
- * initialize them via object_initialize() in their own
- * #TypeInfo.instance_init and forward the realization events
- * appropriately.
  *
  * Any type may override the @realize and/or @unrealize callbacks but needs
  * to call the parent type's implementation if keeping their functionality
@@ -101,10 +101,8 @@ typedef int (*DeviceSyncConfig)(DeviceState *dev, Error **errp);
 /**
  * struct DeviceClass - The base class for all devices.
  * @props: Properties accessing state fields.
- * @realize: Callback function invoked when the #DeviceState:realized
- * property is changed to %true.
- * @unrealize: Callback function invoked when the #DeviceState:realized
- * property is changed to %false.
+ * @realize: Callback function to realize the device.
+ * @unrealize: Callback function to unrealize the device.
  * @sync_config: Callback function invoked when QMP command device-sync-config
  * is called. Should synchronize device configuration from host to guest part
  * and notify the guest about the change.
@@ -322,8 +320,10 @@ DECLARE_OBJ_CHECKERS(BusState, BusClass,
 struct BusClass {
     ObjectClass parent_class;
 
+#ifdef CONFIG_HMP
     /* FIXME first arg should be BusState */
-    void (*print_dev)(Monitor *mon, DeviceState *dev, int indent);
+    void (*print_dev)(MonitorHMP *mon, DeviceState *dev, int indent);
+#endif
     /*
      * Return a newly allocated string containing the path of the
      * device on this bus.
@@ -383,7 +383,7 @@ struct BusState {
     /* public: */
     DeviceState *parent;
     char *name;
-    HotplugHandler *hotplug_handler;
+    const HotplugHandler *hotplug_handler;
     int max_index;
     bool realized;
     bool full;
@@ -437,7 +437,7 @@ DeviceState *qdev_try_new(const char *name);
  * Context: May be called outside big qemu lock.
  * Return: true if the device has been fully constructed, false otherwise.
  */
-static inline bool qdev_is_realized(DeviceState *dev)
+static inline bool qdev_is_realized(const DeviceState *dev)
 {
     return qatomic_load_acquire(&dev->realized);
 }
@@ -511,8 +511,8 @@ bool qdev_realize_and_unref(DeviceState *dev, BusState *bus, Error **errp);
 void qdev_unrealize(DeviceState *dev);
 void qdev_set_legacy_instance_id(DeviceState *dev, int alias_id,
                                  int required_for_version);
-HotplugHandler *qdev_get_bus_hotplug_handler(DeviceState *dev);
-HotplugHandler *qdev_get_machine_hotplug_handler(DeviceState *dev);
+const HotplugHandler *qdev_get_bus_hotplug_handler(DeviceState *dev);
+const HotplugHandler *qdev_get_machine_hotplug_handler(DeviceState *dev);
 bool qdev_hotplug_allowed(DeviceState *dev, BusState *bus, Error **errp);
 bool qdev_hotunplug_allowed(DeviceState *dev, Error **errp);
 
@@ -526,10 +526,10 @@ bool qdev_hotunplug_allowed(DeviceState *dev, Error **errp);
  * Return: pointer to object that implements TYPE_HOTPLUG_HANDLER interface
  * or NULL if there aren't any.
  */
-HotplugHandler *qdev_get_hotplug_handler(DeviceState *dev);
+const HotplugHandler *qdev_get_hotplug_handler(DeviceState *dev);
 void qdev_unplug(DeviceState *dev, Error **errp);
 int qdev_sync_config(DeviceState *dev, Error **errp);
-void qdev_simple_device_unplug_cb(HotplugHandler *hotplug_dev,
+void qdev_simple_device_unplug_cb(const HotplugHandler *hotplug_dev,
                                   DeviceState *dev, Error **errp);
 void qdev_machine_creation_done(void);
 bool qdev_machine_modified(void);
@@ -1062,11 +1062,11 @@ void qbus_set_bus_hotplug_handler(BusState *bus);
 
 static inline bool qbus_is_hotpluggable(BusState *bus)
 {
-    HotplugHandler *plug_handler = bus->hotplug_handler;
+    const HotplugHandler *plug_handler = bus->hotplug_handler;
     bool ret = !!plug_handler;
 
     if (plug_handler) {
-        HotplugHandlerClass *hdc;
+        const HotplugHandlerClass *hdc;
 
         hdc = HOTPLUG_HANDLER_GET_CLASS(plug_handler);
         if (hdc->is_hotpluggable_bus) {

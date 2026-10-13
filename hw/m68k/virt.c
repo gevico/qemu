@@ -323,10 +323,11 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
 }
 
 static const TypeInfo virt_machine_info = {
-    .name       = MACHINE_TYPE_NAME("virt"),
-    .parent     = TYPE_MACHINE,
-    .abstract   = true,
-    .class_init = virt_machine_class_init,
+    .name         = MACHINE_TYPE_NAME("virt"),
+    .parent       = TYPE_MACHINE,
+    .abstract     = true,
+    .class_init   = virt_machine_class_init,
+    .is_available = target_m68k,
 };
 
 static void virt_machine_register_types(void)
@@ -354,6 +355,7 @@ type_init(virt_machine_register_types)
         .name = MACHINE_VER_TYPE_NAME("virt", __VA_ARGS__), \
         .parent = MACHINE_TYPE_NAME("virt"), \
         .class_init = MACHINE_VER_SYM(class_init, virt, __VA_ARGS__), \
+        .is_available = target_m68k, \
     }; \
     static void MACHINE_VER_SYM(register, virt, __VA_ARGS__)(void) \
     { \
@@ -367,10 +369,17 @@ type_init(virt_machine_register_types)
 #define DEFINE_VIRT_MACHINE(major, minor) \
     DEFINE_VIRT_MACHINE_IMPL(false, major, minor)
 
-static void virt_machine_11_1_options(MachineClass *mc)
+static void virt_machine_11_2_options(MachineClass *mc)
 {
 }
-DEFINE_VIRT_MACHINE_AS_LATEST(11, 1)
+DEFINE_VIRT_MACHINE_AS_LATEST(11, 2)
+
+static void virt_machine_11_1_options(MachineClass *mc)
+{
+    virt_machine_11_2_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_1, hw_compat_11_1_len);
+}
+DEFINE_VIRT_MACHINE(11, 1)
 
 static void virt_machine_11_0_options(MachineClass *mc)
 {

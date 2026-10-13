@@ -105,6 +105,7 @@ BOOL_FIELD(ext_zvfbfmin)
 BOOL_FIELD(ext_zvfbfwma)
 BOOL_FIELD(ext_zvfh)
 BOOL_FIELD(ext_zvfhmin)
+BOOL_FIELD(ext_sdtrig)
 BOOL_FIELD(ext_smaia)
 BOOL_FIELD(ext_ssaia)
 BOOL_FIELD(ext_smctr)
@@ -138,6 +139,8 @@ BOOL_FIELD(has_priv_1_11)
 
 /* Always enabled for TCG if has_priv_1_11 */
 BOOL_FIELD(ext_ziccrse)
+
+BOOL_FIELD(ext_zicclsm)
 
 /* Vendor-specific custom extensions */
 BOOL_FIELD(ext_xtheadba)

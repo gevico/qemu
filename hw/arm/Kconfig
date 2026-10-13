@@ -100,21 +100,6 @@ config MUSCA
     select SPLIT_IRQ
     select UNIMP
 
-config MARVELL_88W8618
-    bool
-
-config MUSICPAL
-    bool
-    default y
-    depends on TCG && ARM
-    select OR_IRQ
-    select BITBANG_I2C
-    select MARVELL_88W8618
-    select PTIMER
-    select PFLASH_CFI02
-    select SERIAL_MM
-    select WM8750
-
 config NETDUINO2
     bool
     default y
@@ -155,7 +140,6 @@ config REALVIEW
     select ARM11MPCORE
     select ARM_TIMER
     select VERSATILE_PCI
-    select WM8750 # audio codec
     select LSI_SCSI_PCI
     select PCI
     select PL011 # UART
@@ -311,6 +295,7 @@ config ALLWINNER_A10
     select ALLWINNER_EMAC
     select ALLWINNER_I2C
     select ALLWINNER_A10_SPI
+    select ALLWINNER_GPIO
     select AXP2XX_PMU
     select SERIAL_MM
     select UNIMP
@@ -533,7 +518,10 @@ config ASPEED_SOC
     bool
     default y
     depends on TCG && ARM
+    imply GENERIC_LOADER
     imply PCI_DEVICES
+    imply E1000E_PCI_EXPRESS
+    select ASPEED_UDC
     select DS1338
     select FTGMAC100
     select I2C
@@ -551,14 +539,17 @@ config ASPEED_SOC
     select TMP105
     select TMP421
     select EMC141X
+    select OR_IRQ
     select UNIMP
     select LED
     select PMBUS
     select MAX31785
+    select ADC128D818
     select FSI_APB2OPB_ASPEED
     select AT24C
-    select PCI_EXPRESS
     select PCI_EXPRESS_ASPEED
+    select USB_EHCI_SYSBUS
+    select SDHCI
 
 config MPS2
     bool
@@ -725,3 +716,18 @@ config ARMSSE
     select UNIMP
     select SSE_COUNTER
     select SSE_TIMER
+
+config AXIADO_SOC
+    bool
+    select ARM_GIC
+    select CADENCE # UART
+    select AXIADO_CLK
+    select CADENCE_GPIO
+    select AXIADO_SDHCI
+    select UNIMP
+
+config AXIADO_EVK
+    bool
+    default y
+    depends on TCG && ARM
+    select AXIADO_SOC

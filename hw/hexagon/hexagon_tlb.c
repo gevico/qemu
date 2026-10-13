@@ -12,6 +12,7 @@
 #include "hw/core/resettable.h"
 #include "migration/vmstate.h"
 #include "monitor/monitor.h"
+#include "monitor/hmp.h"
 #include "qapi/error.h"
 #include "exec/page-protection.h"
 #include "exec/target_page.h"
@@ -56,21 +57,6 @@ typedef enum {
 
 #define NUM_PGSIZE_TYPES (PGSIZE_1G + 1)
 
-static const char *pgsize_str[NUM_PGSIZE_TYPES] = {
-    "4K",
-    "16K",
-    "64K",
-    "256K",
-    "1M",
-    "4M",
-    "16M",
-    "64M",
-    "256M",
-    "1G",
-};
-
-#define INVALID_MASK 0xffffffffLL
-
 static const uint64_t encmask_2_mask[] = {
     0x0fffLL,                           /* 4k,   0000 */
     0x3fffLL,                           /* 16k,  0001 */
@@ -82,19 +68,25 @@ static const uint64_t encmask_2_mask[] = {
     0x3ffffffLL,                        /* 64m,  0111 */
     0xfffffffLL,                        /* 256m, 1000 */
     0x3fffffffLL,                       /* 1g,   1001 */
-    INVALID_MASK,                       /* RSVD, 1010 */
 };
+
+/*
+ * The page size is encoded as the position of the lowest set bit of
+ * PPD[9:0].  Bits outside that field belong to the cacheability and
+ * permission fields and must not take part in the decode.  An all-zero
+ * field denotes the smallest page, matching get_pgsize() in the reference
+ * simulator.
+ */
+#define PGSIZE_FIELD_MASK ((1 << NUM_PGSIZE_TYPES) - 1)
 
 static inline tlb_pgsize_t hex_tlb_pgsize_type(uint64_t entry)
 {
-    if (entry == 0) {
-        qemu_log_mask(CPU_LOG_MMU, "%s: Supplied TLB entry was 0!\n",
-                      __func__);
-        return 0;
+    uint32_t field = GET_PTE_PPD(entry) & PGSIZE_FIELD_MASK;
+
+    if (field == 0) {
+        return PGSIZE_4K;
     }
-    tlb_pgsize_t size = ctz64(entry);
-    g_assert(size < NUM_PGSIZE_TYPES);
-    return size;
+    return ctz32(field);
 }
 
 static inline uint64_t hex_tlb_page_size_bytes(uint64_t entry)
@@ -121,38 +113,60 @@ static inline uint64_t hex_tlb_virt_addr(uint64_t entry)
     return (uint64_t)GET_PTE_VPN(entry) << qemu_target_page_bits();
 }
 
-bool hexagon_tlb_dump_entry(Monitor *mon, uint64_t entry)
+#ifdef CONFIG_HMP
+static const char *pgsize_str[NUM_PGSIZE_TYPES] = {
+    "4K",
+    "16K",
+    "64K",
+    "256K",
+    "1M",
+    "4M",
+    "16M",
+    "64M",
+    "256M",
+    "1G",
+};
+
+bool hexagon_tlb_dump_entry(MonitorHMP *hmp, uint64_t entry)
 {
     if (GET_PTE_V(entry)) {
         uint64_t PA = hex_tlb_phys_addr(entry);
         uint64_t VA = hex_tlb_virt_addr(entry);
-        monitor_printf(mon, "0x%016" PRIx64 ": ", entry);
-        monitor_printf(mon, "V:%" PRId64 " G:%" PRId64
-                       " A1:%" PRId64 " A0:%" PRId64,
-                       GET_PTE_V(entry),
-                       GET_PTE_G(entry),
-                       GET_PTE_ATR1(entry),
-                       GET_PTE_ATR0(entry));
-        monitor_printf(mon, " ASID:0x%02" PRIx64 " VA:0x%08" PRIx64,
-                       GET_PTE_ASID(entry), VA);
-        monitor_printf(mon,
-                       " X:%" PRId64 " W:%" PRId64 " R:%" PRId64
-                       " U:%" PRId64 " C:%" PRId64,
-                       GET_PTE_X(entry),
-                       GET_PTE_W(entry),
-                       GET_PTE_R(entry),
-                       GET_PTE_U(entry),
-                       GET_PTE_C(entry));
-        monitor_printf(mon, " PA:0x%09" PRIx64 " SZ:%s (0x%" PRIx64 ")",
-                       PA, pgsize_str[hex_tlb_pgsize_type(entry)],
-                       hex_tlb_page_size_bytes(entry));
-        monitor_printf(mon, "\n");
+        monitor_hmp_printf(hmp, "0x%016" PRIx64 ": ", entry);
+        monitor_hmp_printf(hmp, "V:%" PRId64 " G:%" PRId64
+                           " A1:%" PRId64 " A0:%" PRId64,
+                           GET_PTE_V(entry),
+                           GET_PTE_G(entry),
+                           GET_PTE_ATR1(entry),
+                           GET_PTE_ATR0(entry));
+        monitor_hmp_printf(hmp, " ASID:0x%02" PRIx64 " VA:0x%08" PRIx64,
+                           GET_PTE_ASID(entry), VA);
+        monitor_hmp_printf(hmp,
+                           " X:%" PRId64 " W:%" PRId64 " R:%" PRId64
+                           " U:%" PRId64 " C:%" PRId64,
+                           GET_PTE_X(entry),
+                           GET_PTE_W(entry),
+                           GET_PTE_R(entry),
+                           GET_PTE_U(entry),
+                           GET_PTE_C(entry));
+        monitor_hmp_printf(hmp, " PA:0x%09" PRIx64 " SZ:%s (0x%" PRIx64 ")",
+                           PA, pgsize_str[hex_tlb_pgsize_type(entry)],
+                           hex_tlb_page_size_bytes(entry));
+        monitor_hmp_printf(hmp, "\n");
         return true;
     }
 
     /* Not valid */
     return false;
 }
+
+void hexagon_tlb_dump(MonitorHMP *hmp, HexagonTLBState *tlb)
+{
+    for (uint32_t i = 0; i < tlb->num_entries; i++) {
+        hexagon_tlb_dump_entry(hmp, tlb->entries[i]);
+    }
+}
+#endif
 
 static inline bool hex_tlb_entry_match_noperm(uint64_t entry, uint32_t asid,
                                               uint64_t VA)
@@ -312,6 +326,16 @@ bool hexagon_tlb_find_match(HexagonTLBState *tlb, uint32_t asid,
     for (uint32_t i = 0; i < tlb->num_entries; i++) {
         if (hex_tlb_entry_match(tlb->entries[i], asid, VA, access_type,
                                 PA, prot, size, excp, cause_code, mmu_idx)) {
+            if (*excp == 0) {
+                for (i++; i < tlb->num_entries; i++) {
+                    if (hex_tlb_entry_match_noperm(tlb->entries[i], asid,
+                                                   VA)) {
+                        *excp = HEX_EVENT_IMPRECISE;
+                        *cause_code = HEX_CAUSE_IMPRECISE_MULTI_TLB_MATCH;
+                        break;
+                    }
+                }
+            }
             return true;
         }
     }
@@ -319,15 +343,18 @@ bool hexagon_tlb_find_match(HexagonTLBState *tlb, uint32_t asid,
 }
 
 uint32_t hexagon_tlb_lookup(HexagonTLBState *tlb, uint32_t asid,
-                            uint32_t VA, int *cause_code)
+                            uint32_t VA, uint32_t *imprecise_exception,
+                            int *cause_code)
 {
     uint32_t not_found = 0x80000000;
     uint32_t idx = not_found;
 
+    *imprecise_exception = 0;
     for (uint32_t i = 0; i < tlb->num_entries; i++) {
         uint64_t entry = tlb->entries[i];
         if (hex_tlb_entry_match_noperm(entry, asid, VA)) {
             if (idx != not_found) {
+                *imprecise_exception = HEX_EVENT_IMPRECISE;
                 *cause_code = HEX_CAUSE_IMPRECISE_MULTI_TLB_MATCH;
                 break;
             }
@@ -374,13 +401,6 @@ int hexagon_tlb_check_overlap(HexagonTLBState *tlb, uint64_t entry,
         return -2;
     }
     return -1;
-}
-
-void hexagon_tlb_dump(Monitor *mon, HexagonTLBState *tlb)
-{
-    for (uint32_t i = 0; i < tlb->num_entries; i++) {
-        hexagon_tlb_dump_entry(mon, tlb->entries[i]);
-    }
 }
 
 uint32_t hexagon_tlb_get_num_entries(HexagonTLBState *tlb)

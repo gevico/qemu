@@ -24,14 +24,6 @@ const char *target_name(void);
 unsigned target_long_bits(void);
 
 /**
- * target_machine_typename:
- *
- * Returns: Name of the QOM interface implemented by machines
- *          usable on this target binary.
- */
-const char *target_machine_typename(void);
-
-/**
  * target_cpu_type:
  *
  * Returns: target CPU base QOM type name (i.e. TYPE_X86_CPU).
@@ -70,6 +62,20 @@ bool target_arm(void);
  * Returns whether the target architecture is Aarch64.
  */
 bool target_aarch64(void);
+
+/**
+ * target_m68k:
+ *
+ * Returns whether the target architecture is M68K.
+ */
+bool target_m68k(void);
+
+/**
+ * target_or1k:
+ *
+ * Returns whether the target architecture is OpenRISC 1000.
+ */
+bool target_or1k(void);
 
 /**
  * target_base_ppc:

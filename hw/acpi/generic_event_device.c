@@ -11,6 +11,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "hw/acpi/acpi.h"
 #include "hw/acpi/pcihp.h"
 #include "hw/acpi/cpu.h"
@@ -44,10 +45,11 @@ static const uint32_t ged_supported_events[] = {
  * affected by the interrupt. This way, we can support up to 32 events
  * with a unique interrupt.
  */
-void build_ged_aml(Aml *table, const char *name, HotplugHandler *hotplug_dev,
+void build_ged_aml(Aml *table, const char *name,
+                   const HotplugHandler *hotplug_dev,
                    uint32_t ged_irq, AmlRegionSpace rs, hwaddr ged_base)
 {
-    AcpiGedState *s = ACPI_GED(hotplug_dev);
+    const AcpiGedState *s = ACPI_GED(hotplug_dev);
     Aml *crs = aml_resource_template();
     Aml *evt, *field;
     Aml *dev = aml_device("%s", name);
@@ -249,7 +251,7 @@ static const MemoryRegionOps ged_regs_ops = {
     },
 };
 
-static void acpi_ged_device_pre_plug_cb(HotplugHandler *hotplug_dev,
+static void acpi_ged_device_pre_plug_cb(const HotplugHandler *hotplug_dev,
                                         DeviceState *dev, Error **errp)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_PCI_DEVICE)) {
@@ -257,7 +259,7 @@ static void acpi_ged_device_pre_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void acpi_ged_device_plug_cb(HotplugHandler *hotplug_dev,
+static void acpi_ged_device_plug_cb(const HotplugHandler *hotplug_dev,
                                     DeviceState *dev, Error **errp)
 {
     AcpiGedState *s = ACPI_GED(hotplug_dev);
@@ -278,7 +280,7 @@ static void acpi_ged_device_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void acpi_ged_unplug_request_cb(HotplugHandler *hotplug_dev,
+static void acpi_ged_unplug_request_cb(const HotplugHandler *hotplug_dev,
                                        DeviceState *dev, Error **errp)
 {
     AcpiGedState *s = ACPI_GED(hotplug_dev);
@@ -297,7 +299,7 @@ static void acpi_ged_unplug_request_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static void acpi_ged_unplug_cb(HotplugHandler *hotplug_dev,
+static void acpi_ged_unplug_cb(const HotplugHandler *hotplug_dev,
                                DeviceState *dev, Error **errp)
 {
     AcpiGedState *s = ACPI_GED(hotplug_dev);
@@ -608,6 +610,15 @@ static void acpi_ged_class_init(ObjectClass *class, const void *data)
 
     adevc->ospm_status = acpi_ged_ospm_status;
     adevc->send_event = acpi_ged_send_event;
+
+    object_class_property_add_uint16_ptr(class, ACPI_PCIHP_IO_BASE_PROP,
+                                         offsetof(AcpiGedState,
+                                                  pcihp_state.io_base),
+                                         OBJ_PROP_FLAG_READ);
+    object_class_property_add_uint16_ptr(class, ACPI_PCIHP_IO_LEN_PROP,
+                                         offsetof(AcpiGedState,
+                                                  pcihp_state.io_len),
+                                         OBJ_PROP_FLAG_READ);
 }
 
 static const TypeInfo acpi_ged_info = {

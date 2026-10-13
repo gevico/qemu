@@ -413,6 +413,9 @@ static bool gen_load(DisasContext *ctx, arg_lb *a, MemOp memop)
     if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
     }
+    if (!ctx->cfg_ptr->ext_zicclsm) {
+        memop |= MO_ALIGN;
+    }
     decode_save_opc(ctx, 0);
     if (get_xl(ctx) == MXL_RV128) {
         out = gen_load_i128(ctx, a, memop);
@@ -486,6 +489,9 @@ static bool gen_store_tl(DisasContext *ctx, arg_sb *a, MemOp memop)
     }
 
     tcg_gen_qemu_st_tl(data, addr, ctx->mem_idx, memop);
+#ifdef CONFIG_USER_ONLY
+    gen_riscv_invalidate_reservations(addr, memop);
+#endif
     return true;
 }
 
@@ -515,14 +521,25 @@ static bool gen_store_i128(DisasContext *ctx, arg_sb *a, MemOp memop)
         }
         tcg_gen_qemu_st_i128(t16, addrl, ctx->mem_idx, memop);
     }
+#ifdef CONFIG_USER_ONLY
+    gen_riscv_invalidate_reservations(addrl, memop);
+#endif
     return true;
 }
 
 static bool gen_store(DisasContext *ctx, arg_sb *a, MemOp memop)
 {
+#ifdef CONFIG_USER_ONLY
+    if (!gen_riscv_reservation_serialize(ctx)) {
+        return false;
+    }
+#endif
     memop |= ctx->mo_endianness;
     if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
+    }
+    if (!ctx->cfg_ptr->ext_zicclsm) {
+        memop |= MO_ALIGN;
     }
     decode_save_opc(ctx, 0);
     if (get_xl(ctx) == MXL_RV128) {

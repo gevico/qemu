@@ -77,13 +77,14 @@ void tcg_cpu_destroy(CPUState *cpu)
 
 int tcg_cpu_exec(CPUState *cpu)
 {
-    int ret;
+    int excp;
+
     assert(tcg_enabled());
     cpu_exec_start(cpu);
-    ret = cpu_exec(cpu);
+    excp = cpu_exec(cpu);
     cpu_exec_end(cpu);
 
-    return ret;
+    return excp;
 }
 
 static void tcg_cpu_reset_hold(CPUState *cpu)
@@ -221,6 +222,7 @@ static void tcg_accel_ops_init(AccelClass *ac)
     ops->insert_gdbstub_breakpoint = tcg_insert_gdbstub_breakpoint;
     ops->remove_gdbstub_breakpoint = tcg_remove_gdbstub_breakpoint;
     ops->remove_all_gdbstub_breakpoints = tcg_remove_all_gdbstub_breakpoints;
+    ops->update_guest_debug = tcg_update_cflags;
 }
 
 static void tcg_accel_ops_class_init(ObjectClass *oc, const void *data)

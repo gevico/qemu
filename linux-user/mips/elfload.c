@@ -20,17 +20,19 @@ const char *get_elf_cpu_model(uint32_t eflags)
     case EF_MIPS_MACH_LS2F:
         return "Loongson-2F";
     case EF_MIPS_MACH_LS3A:
-        return "Loongson-3A1000";
+        return (eflags & EF_MIPS_NAN2008) ? "Loongson-3A4000"
+                                          : "Loongson-3A1000";
     default:
         break;
     }
-    switch (eflags & EF_MIPS_ARCH) {
-    case EF_MIPS_ARCH_64R6:
+    if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_64R6) {
         return "I6400";
-    case EF_MIPS_ARCH_64R2:
+    }
+    if (eflags & EF_MIPS_NAN2008) {
+        return "Loongson-3A4000";
+    }
+    if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_64R2) {
         return "MIPS64R2-generic";
-    default:
-        break;
     }
     return "5KEf";
 #else
@@ -129,6 +131,14 @@ const char *get_elf_base_platform(CPUState *cs)
 }
 
 #undef MATCH_PLATFORM_INSN
+
+void elf_core_copy_fpregs(target_elf_fpregset_t *r, const CPUMIPSState *env)
+{
+    for (int i = 0; i < 32; i++) {
+        r->fpr[i] = tswap64(env->active_fpu.fpr[i].d);
+    }
+    r->fcsr = tswap32(env->active_fpu.fcr31);
+}
 
 /* See linux kernel: arch/mips/kernel/process.c:elf_dump_regs.  */
 #ifndef TARGET_MIPS64
