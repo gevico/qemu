@@ -58,8 +58,9 @@ static void gw_spark_10_qtest_dispatch_kernel(
         GW_SPARK_10_REG_BLOCK_DIM_Z,
     };
 
-    for (size_t i = 0; i < kernel_size; i++) {
-        qpci_io_writel(pdev, bar2, i * sizeof(kernel[0]), kernel[i]);
+    if (kernel_size) {
+        qpci_memwrite(pdev, bar2, 0, kernel,
+                      kernel_size * sizeof(kernel[0]));
     }
 
     qpci_io_writel(pdev, bar0, GW_SPARK_10_REG_GLOBAL_CTRL,
@@ -241,14 +242,10 @@ static void gw_spark_10_test_invalid_kernel(void *object, void *data,
     qpci_iounmap(pdev, bar2);
 }
 
-static void gw_spark_10_qtest_assert_kernel_fault(
-    QPCIDevice *pdev, QPCIBar bar0, QPCIBar bar2,
-    const uint32_t grid_dim[3], const uint32_t block_dim[3])
+static void gw_spark_10_qtest_assert_kernel_fault_status(QPCIDevice *pdev,
+                                                         QPCIBar bar0)
 {
     uint32_t value;
-
-    gw_spark_10_qtest_dispatch_kernel(pdev, bar0, bar2, NULL, 0, grid_dim,
-                                      block_dim);
 
     value = qpci_io_readl(pdev, bar0, GW_SPARK_10_REG_GLOBAL_STATUS);
     g_assert_cmpuint(value & GW_SPARK_10_STATUS_READY, !=, 0);
@@ -257,6 +254,15 @@ static void gw_spark_10_qtest_assert_kernel_fault(
     g_assert_cmpuint(value & GW_SPARK_10_ERR_KERNEL_FAULT, !=, 0);
     value = qpci_io_readl(pdev, bar0, GW_SPARK_10_REG_IRQ_STATUS);
     g_assert_cmpuint(value & GW_SPARK_10_IRQ_ERROR, !=, 0);
+}
+
+static void gw_spark_10_qtest_assert_kernel_fault(
+    QPCIDevice *pdev, QPCIBar bar0, QPCIBar bar2,
+    const uint32_t grid_dim[3], const uint32_t block_dim[3])
+{
+    gw_spark_10_qtest_dispatch_kernel(pdev, bar0, bar2, NULL, 0, grid_dim,
+                                      block_dim);
+    gw_spark_10_qtest_assert_kernel_fault_status(pdev, bar0);
 
     qpci_io_writel(pdev, bar0, GW_SPARK_10_REG_GLOBAL_CTRL,
                    GW_SPARK_10_CTRL_RESET);
@@ -290,6 +296,77 @@ static void gw_spark_10_test_oversized_dispatch(
     gw_spark_10_qtest_assert_kernel_fault(pdev, bar0, bar2, overflowing_grid,
                                            overflowing_block);
 
+    qpci_iounmap(pdev, bar0);
+    qpci_iounmap(pdev, bar2);
+}
+
+static uint32_t *gw_spark_10_qtest_create_nop_kernel(size_t instruction_count)
+{
+    uint32_t *kernel = g_new(uint32_t, instruction_count);
+
+    for (size_t i = 0; i < instruction_count - 1; i++) {
+        kernel[i] = 0x00000013;
+    }
+    kernel[instruction_count - 1] = 0x00100073;
+
+    return kernel;
+}
+
+static void gw_spark_10_test_dispatch_instruction_budget(
+    void *object, void *data, QGuestAllocator *alloc)
+{
+    const uint32_t thread_count =
+        GW_SPARK_10_MAX_DISPATCH_INSTRUCTIONS /
+        GW_SPARK_10_MAX_INSTRUCTIONS_PER_LANE + 1;
+    const size_t instruction_count =
+        GW_SPARK_10_MAX_DISPATCH_INSTRUCTIONS / thread_count + 1;
+    uint32_t *kernel = gw_spark_10_qtest_create_nop_kernel(instruction_count);
+    QGwSpark10 *device = object;
+    QPCIDevice *pdev = &device->pdev;
+    QPCIBar bar0;
+    QPCIBar bar2;
+
+    g_assert_cmpuint(instruction_count, <,
+                     GW_SPARK_10_MAX_INSTRUCTIONS_PER_LANE);
+    g_assert_cmpuint((uint64_t)thread_count * instruction_count, >,
+                     GW_SPARK_10_MAX_DISPATCH_INSTRUCTIONS);
+
+    qpci_device_enable(pdev);
+    bar0 = qpci_iomap(pdev, 0, NULL);
+    bar2 = qpci_iomap(pdev, 2, NULL);
+    gw_spark_10_qtest_run_kernel(pdev, bar0, bar2, kernel,
+                                 instruction_count, thread_count);
+    gw_spark_10_qtest_assert_kernel_fault_status(pdev, bar0);
+
+    g_free(kernel);
+    qpci_iounmap(pdev, bar0);
+    qpci_iounmap(pdev, bar2);
+}
+
+static void gw_spark_10_test_lane_instruction_budget(
+    void *object, void *data, QGuestAllocator *alloc)
+{
+    const size_t instruction_count =
+        GW_SPARK_10_MAX_INSTRUCTIONS_PER_LANE + 1;
+    uint32_t *kernel = gw_spark_10_qtest_create_nop_kernel(instruction_count);
+    QGwSpark10 *device = object;
+    QPCIDevice *pdev = &device->pdev;
+    QPCIBar bar0;
+    QPCIBar bar2;
+
+    g_assert_cmpuint(instruction_count, >,
+                     GW_SPARK_10_MAX_INSTRUCTIONS_PER_LANE);
+    g_assert_cmpuint(instruction_count, <,
+                     GW_SPARK_10_MAX_DISPATCH_INSTRUCTIONS);
+
+    qpci_device_enable(pdev);
+    bar0 = qpci_iomap(pdev, 0, NULL);
+    bar2 = qpci_iomap(pdev, 2, NULL);
+    gw_spark_10_qtest_run_kernel(pdev, bar0, bar2, kernel,
+                                 instruction_count, 1);
+    gw_spark_10_qtest_assert_kernel_fault_status(pdev, bar0);
+
+    g_free(kernel);
     qpci_iounmap(pdev, bar0);
     qpci_iounmap(pdev, bar2);
 }
@@ -568,6 +645,10 @@ static void gw_spark_10_register_nodes(void)
                  gw_spark_10_test_invalid_kernel, NULL);
     qos_add_test("oversized-dispatch", "gw-spark-10",
                  gw_spark_10_test_oversized_dispatch, NULL);
+    qos_add_test("dispatch-instruction-budget", "gw-spark-10",
+                 gw_spark_10_test_dispatch_instruction_budget, NULL);
+    qos_add_test("lane-instruction-budget", "gw-spark-10",
+                 gw_spark_10_test_lane_instruction_budget, NULL);
     qos_add_test("migration-blocked", "gw-spark-10",
                  gw_spark_10_test_migration_blocked, NULL);
     qos_add_test("float-kernel", "gw-spark-10",
