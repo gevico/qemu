@@ -41,6 +41,9 @@ Blocks, warps, and lanes run serially. A warp has 32 lanes. The interpreter
 implements the RV32 instruction subset used by the course tests, including
 basic RV32F operations and BF16, FP8 E4M3/E5M2, and FP4 E2M1 conversions.
 Kernel code and data are addressed within VRAM using 32-bit core addresses.
+Each dispatch supports at most 65,536 threads in total and 8,192 threads per
+block. A dispatch also stops after 1,048,576 interpreted instructions in total
+or 10,000 instructions for one lane, whichever limit is reached first.
 
 The execution core does not consume kernel arguments or shared memory. The
 barrier register records writes but does not synchronize lanes. The doorbell
@@ -50,6 +53,9 @@ MSI-X and INTx notification delivery is not implemented.
 The model is intended for functional exercises. Its compute-unit properties,
 serial execution, and limited interpreter do not represent GPU throughput or
 hardware scheduling behavior.
+
+Migration is disabled while the device is attached because VRAM, kernel
+parameters, DMA state, and SIMT execution context are not serialized.
 
 Source provenance
 -----------------
