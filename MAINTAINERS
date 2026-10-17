@@ -2163,6 +2163,7 @@ M: Chao Liu <chao.liu.zevorn@gmail.com>
 S: Maintained
 F: hw/misc/gw-spark-10-core.c
 F: hw/misc/gw-spark-10-core.h
+F: hw/misc/gw-spark-10.c
 F: include/hw/misc/gw-spark-10.h
 
 IDE
