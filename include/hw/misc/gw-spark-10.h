@@ -11,6 +11,7 @@
 
 #include "hw/pci/pci_device.h"
 #include "hw/pci/pci_ids.h"
+#include "qapi/error.h"
 #include "qom/object.h"
 
 #define TYPE_GW_SPARK_10 "gw-spark-10"
@@ -164,6 +165,7 @@ struct GwSpark10State {
     GwSpark10KernelParams kernel;
     GwSpark10DmaState dma;
     GwSpark10SimtContext simt;
+    Error *migration_blocker;
 };
 
 #endif /* HW_MISC_GW_SPARK_10_H */

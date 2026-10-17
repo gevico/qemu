@@ -15,7 +15,7 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "hw/core/qdev-properties.h"
-#include "migration/vmstate.h"
+#include "migration/blocker.h"
 
 #include "hw/misc/gw-spark-10.h"
 #include "gw-spark-10-core.h"
@@ -513,12 +513,20 @@ static void gw_spark_10_realize(PCIDevice *pdev, Error **errp)
     msi_init(pdev, 0, 1, true, false, errp);
 
     s->global_status = GW_SPARK_10_STATUS_READY;
+
+    error_setg(&s->migration_blocker,
+               "GW-Spark-10 does not support migration because VRAM and "
+               "execution state are not serialized");
+    if (migrate_add_blocker(&s->migration_blocker, errp) < 0) {
+        return;
+    }
 }
 
 static void gw_spark_10_exit(PCIDevice *pdev)
 {
     GwSpark10State *s = GW_SPARK_10(pdev);
 
+    migrate_del_blocker(&s->migration_blocker);
     g_free(s->vram_ptr);
     msix_uninit(pdev, &s->ctrl_mmio, &s->ctrl_mmio);
     msi_uninit(pdev);
@@ -542,21 +550,6 @@ static const Property gw_spark_10_properties[] = {
                        GW_SPARK_10_DEFAULT_VRAM_SIZE),
 };
 
-static const VMStateDescription vmstate_gw_spark_10 = {
-    .name = "gw-spark-10",
-    .version_id = 1,
-    .minimum_version_id = 1,
-    .fields = (const VMStateField[]) {
-        VMSTATE_PCI_DEVICE(parent_obj, GwSpark10State),
-        VMSTATE_UINT32(global_ctrl, GwSpark10State),
-        VMSTATE_UINT32(global_status, GwSpark10State),
-        VMSTATE_UINT32(error_status, GwSpark10State),
-        VMSTATE_UINT32(irq_enable, GwSpark10State),
-        VMSTATE_UINT32(irq_status, GwSpark10State),
-        VMSTATE_END_OF_LIST()
-    }
-};
-
 static void gw_spark_10_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -571,7 +564,6 @@ static void gw_spark_10_class_init(ObjectClass *klass, const void *data)
 
     device_class_set_legacy_reset(dc, gw_spark_10_reset);
     dc->desc = "GW-Spark-10 educational GPGPU device";
-    dc->vmsd = &vmstate_gw_spark_10;
     device_class_set_props(dc, gw_spark_10_properties);
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
