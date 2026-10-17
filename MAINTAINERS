@@ -2158,6 +2158,13 @@ S: Maintained
 F: hw/misc/edu.c
 F: docs/specs/edu.rst
 
+GW-Spark-10
+M: Chao Liu <chao.liu.zevorn@gmail.com>
+S: Maintained
+F: hw/misc/gw-spark-10-core.c
+F: hw/misc/gw-spark-10-core.h
+F: include/hw/misc/gw-spark-10.h
+
 IDE
 M: John Snow <jsnow@redhat.com>
 L: qemu-block@nongnu.org
