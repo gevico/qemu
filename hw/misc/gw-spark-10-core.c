@@ -592,24 +592,48 @@ static void gw_spark_10_core_init_warp(
 
 static int gw_spark_10_core_execute_warp(GwSpark10State *s,
                                          GwSpark10Warp *warp,
-                                         uint32_t max_cycles)
+                                         uint32_t max_cycles,
+                                         uint32_t *instruction_budget)
 {
     for (uint32_t lane = 0; lane < GW_SPARK_10_CORE_WARP_SIZE; lane++) {
         GwSpark10Lane *state = &warp->lanes[lane];
         uint32_t cycles = 0;
 
         while (state->active) {
-            if (cycles++ >= max_cycles ||
-                gw_spark_10_core_execute_instruction(s, warp, state)) {
+            if (cycles >= max_cycles || !*instruction_budget) {
                 qemu_log_mask(LOG_GUEST_ERROR,
                               "gw-spark-10: warp %u lane %u execution failed\n",
                               warp->warp_id, lane);
                 return 1;
             }
+            cycles++;
+            if (gw_spark_10_core_execute_instruction(s, warp, state)) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "gw-spark-10: warp %u lane %u execution failed\n",
+                              warp->warp_id, lane);
+                return 1;
+            }
+            (*instruction_budget)--;
         }
     }
 
     return 0;
+}
+
+static bool gw_spark_10_core_count_dimensions(const uint32_t dimensions[3],
+                                              uint64_t limit,
+                                              uint64_t *count)
+{
+    *count = 1;
+    for (size_t i = 0; i < 3; i++) {
+        if (!dimensions[i] ||
+            *count > limit / dimensions[i]) {
+            return false;
+        }
+        *count *= dimensions[i];
+    }
+
+    return true;
 }
 
 int gw_spark_10_core_execute_kernel(GwSpark10State *s)
@@ -617,20 +641,25 @@ int gw_spark_10_core_execute_kernel(GwSpark10State *s)
     uint32_t grid_x = s->kernel.grid_dim[0];
     uint32_t grid_y = s->kernel.grid_dim[1];
     uint32_t grid_z = s->kernel.grid_dim[2];
-    uint32_t block_x = s->kernel.block_dim[0];
-    uint32_t block_y = s->kernel.block_dim[1];
-    uint32_t block_z = s->kernel.block_dim[2];
+    uint64_t grid_blocks;
     uint64_t threads_per_block;
+    uint64_t total_threads;
     uint32_t block_linear = 0;
+    uint32_t instruction_budget = GW_SPARK_10_MAX_DISPATCH_INSTRUCTIONS;
 
     if (s->kernel.kernel_addr > s->vram_size ||
-        grid_x == 0 || grid_y == 0 || grid_z == 0 ||
-        block_x == 0 || block_y == 0 || block_z == 0) {
+        !gw_spark_10_core_count_dimensions(
+            s->kernel.grid_dim, GW_SPARK_10_MAX_DISPATCH_THREADS,
+            &grid_blocks) ||
+        !gw_spark_10_core_count_dimensions(s->kernel.block_dim,
+                                            GW_SPARK_10_MAX_THREADS_PER_BLOCK,
+                                            &threads_per_block) ||
+        grid_blocks > GW_SPARK_10_MAX_DISPATCH_THREADS / threads_per_block) {
         return 1;
     }
 
-    threads_per_block = (uint64_t)block_x * block_y * block_z;
-    if (threads_per_block == 0 || threads_per_block > UINT32_MAX) {
+    total_threads = grid_blocks * threads_per_block;
+    if (total_threads > GW_SPARK_10_MAX_DISPATCH_THREADS) {
         return 1;
     }
 
@@ -651,7 +680,9 @@ int gw_spark_10_core_execute_kernel(GwSpark10State *s)
                         active_threads, base / GW_SPARK_10_CORE_WARP_SIZE,
                         block_linear);
 
-                    if (gw_spark_10_core_execute_warp(s, &warp, 10000)) {
+                    if (gw_spark_10_core_execute_warp(
+                            s, &warp, GW_SPARK_10_MAX_INSTRUCTIONS_PER_LANE,
+                            &instruction_budget)) {
                         return 1;
                     }
                 }
