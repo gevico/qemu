@@ -338,6 +338,10 @@ qos_test_ss.add(
   'riscv-iommu-test.c',
 )
 
+if config_all_devices.has_key('CONFIG_GW_SPARK_10')
+  qos_test_ss.add(files('gw-spark-10-test.c'))
+endif
+
 if config_all_devices.has_key('CONFIG_VIRTIO_SERIAL')
   qos_test_ss.add(files('virtio-serial-test.c'))
 endif

@@ -2165,6 +2165,7 @@ F: hw/misc/gw-spark-10-core.c
 F: hw/misc/gw-spark-10-core.h
 F: hw/misc/gw-spark-10.c
 F: include/hw/misc/gw-spark-10.h
+F: tests/qtest/gw-spark-10-test.c
 
 IDE
 M: John Snow <jsnow@redhat.com>
