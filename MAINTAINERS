@@ -2161,6 +2161,7 @@ F: docs/specs/edu.rst
 GW-Spark-10
 M: Chao Liu <chao.liu.zevorn@gmail.com>
 S: Maintained
+F: docs/specs/gw-spark-10.rst
 F: hw/misc/gw-spark-10-core.c
 F: hw/misc/gw-spark-10-core.h
 F: hw/misc/gw-spark-10.c
